@@ -11,21 +11,22 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("OpenTP Simulator - FANUC M-900iA [UPIITA]")
         self.resize(1200, 800)
         
-        # Historial para almacenar los últimos ángulos seguros (evitar atravesar el suelo)
         self.ultimos_angulos_seguros = []
+        self.sliders = []
         
+        # Layout principal
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
         main_layout = QHBoxLayout(main_widget)
         
-        # --- COLUMNA IZQUIERDA: El Visor 3D ---
+        # --- COLUMNA IZQUIERDA: Visor 3D ---
         self.viewer_3d = RobotViewer3D()
         main_layout.addWidget(self.viewer_3d, stretch=2)
         
-        # --- COLUMNA DERECHA: Panel de Control ---
-        controles_widget = QWidget()
-        controles_layout = QVBoxLayout(controles_widget)
-        main_layout.addWidget(controles_widget, stretch=1)
+        # --- COLUMNA DERECHA: Panel de Controles ---
+        self.controles_widget = QWidget()
+        self.controles_layout = QVBoxLayout(self.controles_widget)
+        main_layout.addWidget(self.controles_widget, stretch=1)
         
         # Panel de Coordenadas Rectangulares
         panel_coordenadas = QWidget()
@@ -39,134 +40,120 @@ class MainWindow(QMainWindow):
         title_coords.setStyleSheet("font-size: 14px; font-weight: bold; color: #50fa7b; background: transparent;")
         coord_layout.addWidget(title_coords)
         
-        self.lbl_pos_x = QLabel("X: 0.00 mm")
-        self.lbl_pos_y = QLabel("Y: 0.00 mm")
-        self.lbl_pos_z = QLabel("Z: 0.00 mm")
+        self.lbl_pos_x = QLabel("X: --- mm")
+        self.lbl_pos_y = QLabel("Y: --- mm")
+        self.lbl_pos_z = QLabel("Z: --- mm")
         coord_layout.addWidget(self.lbl_pos_x)
         coord_layout.addWidget(self.lbl_pos_y)
         coord_layout.addWidget(self.lbl_pos_z)
+        self.controles_layout.addWidget(panel_coordenadas)
+        self.controles_layout.addSpacing(15)
         
-        controles_layout.addWidget(panel_coordenadas)
-        controles_layout.addSpacing(15)
+        # Título de Jogging
+        self.title_controles = QLabel("Control de Ejes (Jog)")
+        self.title_controles.setStyleSheet("font-size: 16px; font-weight: bold;")
+        self.controles_layout.addWidget(self.title_controles)
         
-        title_controles = QLabel("Control de Ejes (Jog)")
-        title_controles.setStyleSheet("font-size: 16px; font-weight: bold;")
-        controles_layout.addWidget(title_controles)
+        # Botón de Home General
+        self.btn_home_general = QPushButton("Resetear Todo a 0° (Home Animado)")
+        self.btn_home_general.setStyleSheet("background-color: #ff5555; color: white; font-weight: bold; padding: 5px; border-radius: 5px;")
+        self.btn_home_general.setEnabled(False) # Inactivo hasta que cargue el robot
+        self.btn_home_general.clicked.connect(self.home_general_animado)
+        self.controles_layout.addWidget(self.btn_home_general)
         
-        btn_home_general = QPushButton("Resetear Todo a 0° (Home Animado)")
-        btn_home_general.setStyleSheet("background-color: #ff5555; color: white; font-weight: bold; padding: 5px; border-radius: 5px;")
-        btn_home_general.clicked.connect(self.home_general_animado)
-        controles_layout.addWidget(btn_home_general)
-        
-        self.sliders = []
-        
-        if self.viewer_3d.chain:
-            contador_ejes = 1
-            num_totales = len(self.viewer_3d.chain.links)
-            self.ultimos_angulos_seguros = [0.0] * num_totales
+        # CONEXIÓN ASÍNCRONA VITAL: Cuando el visor 3D termine, creamos los sliders
+        self.viewer_3d.robot_listo_interfaz.connect(self.construir_sliders_dinamicos)
+        self.controles_layout.addStretch()
+
+    def construir_sliders_dinamicos(self):
+        """Construye las barras de jogging de forma asíncrona tras finalizar la carga en segundo plano."""
+        if not self.viewer_3d.chain:
+            return
             
-            for i, link in enumerate(self.viewer_3d.chain.links):
-                name_lower = link.name.lower()
+        # Remover el stretch temporal inferior para insertar los controles ordenadamente
+        self.controles_layout.takeAt(self.controles_layout.count() - 1)
+        
+        contador_ejes = 1
+        num_totales = len(self.viewer_3d.chain.links)
+        self.ultimos_angulos_seguros = [0.0] * num_totales
+        
+        for i, link in enumerate(self.viewer_3d.chain.links):
+            name_lower = link.name.lower()
+            if "base" in name_lower or "flange" in name_lower or "tool" in name_lower or "world" in name_lower:
+                continue
                 
-                if "base" in name_lower or "flange" in name_lower or "tool" in name_lower or "world" in name_lower:
-                    continue
-                
-                if link.bounds is not None:
-                    limite_min_deg = int(np.degrees(link.bounds[0]))
-                    limite_max_deg = int(np.degrees(link.bounds[1]))
-                else:
-                    limite_min_deg = -180
-                    limite_max_deg = 180
-                
-                nombre_eje = f"Eje joint_{contador_ejes}"
-                
-                eje_header_layout = QHBoxLayout()
-                label = QLabel(f"{nombre_eje}: 0°")
-                eje_header_layout.addWidget(label)
-                
-                btn_reset_individual = QPushButton("0°")
-                btn_reset_individual.setFixedWidth(35)
-                btn_reset_individual.setStyleSheet("background-color: #44475a; color: white; border-radius: 3px; font-size: 11px;")
-                
-                controles_layout.addLayout(eje_header_layout)
-                
-                slider = QSlider(Qt.Orientation.Horizontal)
-                slider.setRange(limite_min_deg, limite_max_deg)
-                slider.setValue(0)
-                slider.setProperty("joint_index", i)
-                slider.setProperty("nombre_limpio", nombre_eje)
-                
-                # Bloqueamos temporalmente señales durante el setup
-                slider.blockSignals(True)
-                slider.valueChanged.connect(self.slider_movido)
-                slider.blockSignals(False)
-                
-                btn_reset_individual.clicked.connect(lambda checked=False, s=slider: self.animar_slider_a_cero(s))
-                eje_header_layout.addWidget(btn_reset_individual)
-                
-                controles_layout.addWidget(slider)
-                self.sliders.append((slider, label, i))
-                contador_ejes += 1
+            limite_min_deg, limite_max_deg = (-180, 180)
+            if link.bounds is not None:
+                limite_min_deg = int(np.degrees(link.bounds[0]))
+                limite_max_deg = int(np.degrees(link.bounds[1]))
             
-        controles_layout.addStretch()
+            nombre_eje = f"Eje joint_{contador_ejes}"
+            eje_header_layout = QHBoxLayout()
+            label = QLabel(f"{nombre_eje}: 0°")
+            eje_header_layout.addWidget(label)
+            
+            btn_reset_individual = QPushButton("0°")
+            btn_reset_individual.setFixedWidth(35)
+            btn_reset_individual.setStyleSheet("background-color: #44475a; color: white; border-radius: 3px; font-size: 11px;")
+            
+            self.controles_layout.addLayout(eje_header_layout)
+            
+            slider = QSlider(Qt.Orientation.Horizontal)
+            slider.setRange(limite_min_deg, limite_max_deg)
+            slider.setValue(0)
+            slider.setProperty("joint_index", i)
+            slider.setProperty("nombre_limpio", nombre_eje)
+            
+            slider.valueChanged.connect(self.slider_movido)
+            btn_reset_individual.clicked.connect(lambda checked=False, s=slider: self.animar_slider_a_cero(s))
+            eje_header_layout.addWidget(btn_reset_individual)
+            
+            self.controles_layout.addWidget(slider)
+            self.sliders.append((slider, label, i))
+            contador_ejes += 1
+            
+        self.controles_layout.addStretch()
+        self.btn_home_general.setEnabled(True)
         self.calcular_coordenadas_rectangulares()
 
     def slider_movido(self):
         if not self.viewer_3d.chain:
             return
-            
         num_totales = len(self.viewer_3d.chain.links)
         angulos_radianes = [0.0] * num_totales
-        
-        # 1. Almacenamos temporalmente los ángulos que el usuario quiere setear
         for slider, _, joint_index in self.sliders:
             angulos_radianes[joint_index] = np.radians(slider.value())
             
-        # 2. SISTEMA ANTICOLISIÓN SUELO: Validamos mediante Cinemática Directa ANTES de dibujar
         matriz_homogena = self.viewer_3d.chain.forward_kinematics(angulos_radianes)
         z_futura_mm = matriz_homogena[2, 3] * 1000
         
-        # Si la punta del robot baja de 15 mm respecto al piso, bloqueamos el movimiento
         if z_futura_mm < 15.0:
-            # Revertimos los sliders a la última posición segura conocida sin disparar bucles de señales
             for slider, label, joint_index in self.sliders:
                 slider.blockSignals(True)
                 grado_seguro = int(np.degrees(self.ultimos_angulos_seguros[joint_index]))
                 slider.setValue(grado_seguro)
-                nombre_eje = slider.property("nombre_limpio")
-                label.setText(f"{nombre_eje}: {grado_seguro}°")
+                label.setText(f"{slider.property('nombre_limpio')}: {grado_seguro}°")
                 slider.blockSignals(False)
-            return # Detenemos la ejecución. No se actualiza el entorno 3D.
+            return
             
-        # 3. Si pasó la validación del suelo, guardamos esta configuración como segura
         self.ultimos_angulos_seguros = list(angulos_radianes)
-        
-        # 4. Actualizamos textos y entorno gráfico con total normalidad
         for slider, label, joint_index in self.sliders:
-            grados = slider.value()
-            nombre_eje = slider.property("nombre_limpio")
-            label.setText(f"{nombre_eje}: {grados}°")
+            label.setText(f"{slider.property('nombre_limpio')}: {slider.value()}°")
             
         self.viewer_3d.actualizar_posicion_visual(angulos_radianes)
         self.calcular_coordenadas_rectangulares()
 
-    # --- SISTEMA DE ANIMACIÓN SUAVE PARA HOME ---
     def animar_slider_a_cero(self, slider):
-        """Crea una interpolación de movimiento para llevar un slider individual a 0°."""
         anim = QVariantAnimation(self)
-        anim.setDuration(500) # Duración de medio segundo
+        anim.setDuration(500)
         anim.setStartValue(slider.value())
         anim.setEndValue(0)
-        anim.setEasingCurve(QEasingCurve.InOutCubic) # Aceleración y desaceleración orgánica
-        
-        # En cada paso de la animación, actualizamos el valor físico del slider
+        anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
         anim.valueChanged.connect(slider.setValue)
         anim.start()
-        # Mantenemos una referencia de la animación para evitar que recolectores de basura la destruyan
         slider.setProperty("animacion_activa", anim)
 
     def home_general_animado(self):
-        """Lanza animaciones simultáneas en todos los ejes para regresar ordenadamente a Home."""
         for slider, _, _ in self.sliders:
             self.animar_slider_a_cero(slider)
 
@@ -179,10 +166,6 @@ class MainWindow(QMainWindow):
             angulos_actuales[joint_index] = np.radians(slider.value())
             
         matriz_homogena = self.viewer_3d.chain.forward_kinematics(angulos_actuales)
-        x_mm = matriz_homogena[0, 3] * 1000
-        y_mm = matriz_homogena[1, 3] * 1000
-        z_mm = matriz_homogena[2, 3] * 1000
-        
-        self.lbl_pos_x.setText(f"X: {x_mm:.2f} mm")
-        self.lbl_pos_y.setText(f"Y: {y_mm:.2f} mm")
-        self.lbl_pos_z.setText(f"Z: {z_mm:.2f} mm")
+        self.lbl_pos_x.setText(f"X: {matriz_homogena[0, 3] * 1000:.2f} mm")
+        self.lbl_pos_y.setText(f"Y: {matriz_homogena[1, 3] * 1000:.2f} mm")
+        self.lbl_pos_z.setText(f"Z: {matriz_homogena[2, 3] * 1000:.2f} mm")
