@@ -1,74 +1,238 @@
-from PySide6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QSlider, QLabel
-from PySide6.QtCore import Qt
-from gui.widgets_3d import RobotViewer3D
 import numpy as np
+from functools import partial
+from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QPushButton, QGroupBox, QLabel, QApplication
+from PySide6.QtCore import Qt, QVariantAnimation, QEasingCurve
+from gui.widgets_3d import RobotViewer3D
+
+class PanelControlIndustrial(QWidget):
+    def __init__(self, viewer_3d, parent=None):
+        super().__init__(parent)
+        self.viewer_3d = viewer_3d 
+        layout_principal = QVBoxLayout(self)
+        
+        self.current_angles_deg = [0.0] * 6 
+        self.deadman_activo = False # Variable de estado en tiempo real
+        
+        estilo_botones_industrial = """
+            QPushButton { 
+                background-color: #333333; color: white; 
+                font-weight: bold; padding: 8px; border: 1px solid #1a1a1a; border-radius: 4px;
+            }
+            QPushButton:pressed { background-color: #28a745; }
+        """
+
+        # ==========================================
+        # 1. ZONA DE POSICIÓN CARTESIANA (Estilo Terminal)
+        # ==========================================
+        grupo_tcp = QGroupBox("Posición Cartesiana (TCP)")
+        grupo_tcp.setStyleSheet("QGroupBox { color: #4caf50; font-weight: bold; }")
+        layout_tcp = QVBoxLayout(grupo_tcp)
+        
+        estilo_labels_tcp = "font-family: Consolas, monospace; font-size: 14px; color: #e0e0e0; margin: 2px;"
+        self.lbl_tcp_x = QLabel("X:  0.00 mm")
+        self.lbl_tcp_y = QLabel("Y:  0.00 mm")
+        self.lbl_tcp_z = QLabel("Z:  0.00 mm")
+        
+        for lbl in (self.lbl_tcp_x, self.lbl_tcp_y, self.lbl_tcp_z):
+            lbl.setStyleSheet(estilo_labels_tcp)
+            layout_tcp.addWidget(lbl)
+            
+        layout_principal.addWidget(grupo_tcp)
+
+        # ==========================================
+        # 2. ZONA DE JOGGING Y BOTÓN HOME
+        # ==========================================
+        grupo_jog = QGroupBox("Control Manual (Jog)")
+        layout_jog = QGridLayout(grupo_jog)
+        
+        # --- NUEVO: Botón de Home ---
+        self.btn_home = QPushButton("HOME")
+        self.btn_home.setStyleSheet("background-color: #007bff; color: white; font-weight: bold; padding: 8px;")
+        self.btn_home.clicked.connect(self.ir_a_home)
+        layout_jog.addWidget(self.btn_home, 0, 0, 1, 2) # Ocupa las 2 columnas
+        
+        etiquetas_botones = [
+            ("-X (J1)", "+X (J1)"), ("-Y (J2)", "+Y (J2)"), ("-Z (J3)", "+Z (J3)"),
+            ("-X(W) (J4)", "+X(W) (J4)"), ("-Y(P) (J5)", "+Y(P) (J5)"), ("-Z(R) (J6)", "+Z(R) (J6)")
+        ]
+        
+        for fila, (texto_neg, texto_pos) in enumerate(etiquetas_botones):
+            btn_neg = QPushButton(texto_neg)
+            btn_pos = QPushButton(texto_pos)
+            
+            for btn in (btn_neg, btn_pos):
+                btn.setAutoRepeat(True)        
+                btn.setAutoRepeatDelay(100)    
+                btn.setAutoRepeatInterval(30)  
+                btn.setStyleSheet(estilo_botones_industrial) 
+            
+            joint_id = fila 
+            btn_neg.clicked.connect(partial(self.procesar_jog_click, joint_id, -1))
+            btn_pos.clicked.connect(partial(self.procesar_jog_click, joint_id, 1))
+            
+            # Sumamos 1 a la fila porque el botón Home está en la fila 0
+            layout_jog.addWidget(btn_neg, fila + 1, 0)
+            layout_jog.addWidget(btn_pos, fila + 1, 1)
+            
+        layout_principal.addWidget(grupo_jog)
+        
+        # ==========================================
+        # 3. ZONA DE ENTRADAS DIGITALES
+        # ==========================================
+        grupo_di = QGroupBox("Entradas Digitales (DI)")
+        layout_di = QGridLayout(grupo_di)
+        
+        for i in range(8):
+            btn_di = QPushButton(f"DI [{i+1}]")
+            btn_di.setCheckable(True)
+            btn_di.setStyleSheet("""
+                QPushButton { background-color: #4a4a4a; color: white; border-radius: 4px; padding: 5px; }
+                QPushButton:checked { background-color: #218838; font-weight: bold; border: 2px solid #1a6329; }
+            """)
+            layout_di.addWidget(btn_di, i // 4, i % 4)
+            
+        layout_principal.addWidget(grupo_di)
+        
+        # ==========================================
+        # 4. INDICADOR DEL DEADMAN SWITCH (Dinámico)
+        # ==========================================
+        self.lbl_deadman = QLabel("Deadman Switch: Mantén presionado [Shift]")
+        self.lbl_deadman.setAlignment(Qt.AlignCenter)
+        self.lbl_deadman.setStyleSheet("color: #ff9800; font-style: italic; font-weight: bold; margin-top: 10px;")
+        layout_principal.addWidget(self.lbl_deadman)
+        
+        layout_principal.addStretch()
+        
+        # Inicializar cálculos de TCP
+        self.actualizar_robot_y_tcp()
+    
+    # ==========================================
+        # 5. MOTOR DE INTERPOLACIÓN DE TRAYECTORIAS
+        # ==========================================
+        self.animacion_movimiento = QVariantAnimation(self)
+        self.animacion_movimiento.setDuration(2000) # El viaje tomará exactamente 2 segundos (2000 ms)
+        
+        # InOutQuad simula las rampas de aceleración y frenado de un servomotor real
+        self.animacion_movimiento.setEasingCurve(QEasingCurve.InOutQuad) 
+        
+        # Cada que el reloj avanza, llama a nuestra función matemática
+        self.animacion_movimiento.valueChanged.connect(self._ejecutar_paso_interpolacion)
+        
+        # Variables para recordar de dónde salimos y a dónde vamos
+        self.angulos_inicio = [0.0] * 6
+        self.angulos_destino = [0.0] * 6
+
+    # --- LÓGICA DE ACTUALIZACIÓN VISUAL ---
+    def actualizar_estado_deadman(self, presionado):
+        """Llamado en tiempo real cuando el teclado detecta Shift"""
+        self.deadman_activo = presionado
+        if presionado:
+            self.lbl_deadman.setStyleSheet("color: #28a745; font-weight: bold; margin-top: 10px;")
+            self.lbl_deadman.setText("DEADMAN ACTIVO (Listo para mover)")
+        else:
+            self.lbl_deadman.setStyleSheet("color: #ff9800; font-style: italic; font-weight: bold; margin-top: 10px;")
+            self.lbl_deadman.setText("Deadman Switch: Mantén presionado [Shift]")
+
+    def ir_a_home(self):
+        """Prepara las coordenadas y arranca el viaje suave hacia ceros"""
+        if not self.deadman_activo:
+            self.lbl_deadman.setStyleSheet("color: #dc3545; font-weight: bold; background-color: #f8d7da; margin-top: 10px;")
+            return
+            
+        # 1. Guardar la "Foto" de dónde estamos ahora
+        self.angulos_inicio = list(self.current_angles_deg)
+        
+        # 2. Definir a dónde vamos (Home = todo en 0)
+        self.angulos_destino = [0.0] * 6
+        
+        # 3. Arrancar la animación desde t=0.0 (0%) hasta t=1.0 (100%)
+        self.animacion_movimiento.setStartValue(0.0)
+        self.animacion_movimiento.setEndValue(1.0)
+        self.animacion_movimiento.start()
+
+    def _ejecutar_paso_interpolacion(self, t):
+        """Calcula los ángulos intermedios. 't' va de 0.0 a 1.0"""
+        
+        # ¡FRENO DE EMERGENCIA INDUSTRIAL!
+        # Si el operador suelta la tecla Shift durante el viaje automático, paramos los motores.
+        if not self.deadman_activo:
+            self.animacion_movimiento.stop()
+            return
+            
+        # Calcular el nuevo ángulo para cada uno de los 6 motores
+        for i in range(6):
+            distancia_total = self.angulos_destino[i] - self.angulos_inicio[i]
+            self.current_angles_deg[i] = self.angulos_inicio[i] + (t * distancia_total)
+            
+        # Mover el modelo 3D y actualizar los números en pantalla
+        self.actualizar_robot_y_tcp()
+
+    def procesar_jog_click(self, joint_index, paso_grados):
+        # Ahora usamos el estado en tiempo real
+        if not self.deadman_activo:
+            self.lbl_deadman.setStyleSheet("color: #dc3545; font-weight: bold; background-color: #f8d7da; margin-top: 10px;")
+            return
+        
+        NUEVO_ANGULO = self.current_angles_deg[joint_index] + paso_grados
+        limites = [180, 75, 120, 360, 125, 360]
+        if abs(NUEVO_ANGULO) > limites[joint_index]:
+            return 
+
+        self.current_angles_deg[joint_index] = NUEVO_ANGULO
+        self.actualizar_robot_y_tcp()
+        
+    def actualizar_robot_y_tcp(self):
+        """Calcula cinemática, mueve el 3D y extrae el TCP"""
+        angulos_rad = np.radians(self.current_angles_deg)
+        len_cadena = len(self.viewer_3d.chain.links)
+        vector_full = [0.0] * len_cadena
+        vector_full[1:7] = angulos_rad 
+        
+        # 1. Actualizar modelo 3D
+        self.viewer_3d.actualizar_posicion_visual(vector_full)
+        
+        # 2. Calcular y mostrar TCP Cartesiano (X, Y, Z) usando la matriz 4x4
+        # El método forward_kinematics devuelve la matriz del efector final
+        fk_matrix = self.viewer_3d.chain.forward_kinematics(vector_full)
+        x_m, y_m, z_m = fk_matrix[:3, 3] # Extrae el vector de traslación en metros
+        
+        # Actualizar etiquetas convirtiendo a milímetros
+        self.lbl_tcp_x.setText(f"X: {x_m * 1000:8.2f} mm")
+        self.lbl_tcp_y.setText(f"Y: {y_m * 1000:8.2f} mm")
+        self.lbl_tcp_z.setText(f"Z: {z_m * 1000:8.2f} mm")
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("OpenTP Simulator - FANUC M-900iA [UPIITA]")
-        self.resize(1100, 700)
+        self.setWindowTitle("OpenTP Simulator - FANUC M-900iA")
+        self.resize(1200, 700)
         
-        # Widget y Layout principal (Horizontal: Izquierda 3D, Derecha Controles)
-        main_widget = QWidget()
-        self.setCentralWidget(main_widget)
-        main_layout = QHBoxLayout(main_widget)
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
         
-        # --- COLUMNA IZQUIERDA: El Visor 3D ---
-        self.viewer_3d = RobotViewer3D()
-        main_layout.addWidget(self.viewer_3d, stretch=2) # Toma más espacio
+        layout_principal = QHBoxLayout(central_widget)
+        layout_principal.setContentsMargins(0, 0, 0, 0)
         
-        # --- COLUMNA DERECHA: Sliders de control (Jogging) ---
-        controles_widget = QWidget()
-        controles_layout = QVBoxLayout(controles_widget)
-        main_layout.addWidget(controles_widget, stretch=1)
+        self.visor_3d = RobotViewer3D()
+        layout_principal.addWidget(self.visor_3d, stretch=3) 
         
-        title_controles = QLabel("Control de Ejes (Jog)")
-        title_controles.setStyleSheet("font-size: 16px; font-weight: bold;")
-        controles_layout.addWidget(title_controles)
+        self.panel_control = PanelControlIndustrial(viewer_3d=self.visor_3d) 
+        layout_principal.addWidget(self.panel_control, stretch=1)
         
-        # Crear 6 sliders de prueba para mover las articulaciones
-        self.sliders = []
-        
-        if self.viewer_3d.chain:
-            for i, link in enumerate(self.viewer_3d.chain.links):
-                # Convertimos el nombre a minúsculas para comparar fácil
-                name_lower = link.name.lower()
-                
-                # FILTRO SEGURO POR NOMBRE: Saltamos los links fijos conocidos del URDF industrial
-                if "base" in name_lower or "flange" in name_lower or "tool" in name_lower or "world" in name_lower:
-                    continue
-                
-                # Nombre limpio en la interfaz: "joint_1" -> "Eje 1"
-                nombre_limpio = link.name.replace("joint_", "Eje ")
-                label = QLabel(f"{nombre_limpio}: 0°")
-                controles_layout.addWidget(label)
-                
-                slider = QSlider(Qt.Orientation.Horizontal)
-                slider.setRange(-180, 180)
-                slider.setValue(0)
-                
-                slider.setProperty("joint_index", i)
-                slider.valueChanged.connect(self.slider_movido)
-                
-                controles_layout.addWidget(slider)
-                self.sliders.append((slider, label, i))
-            
-        controles_layout.addStretch() # Empuja todo hacia arriba
+        # --- FOCUS PARA EL TECLADO ---
+        self.setFocusPolicy(Qt.StrongFocus)
 
-    def slider_movido(self):
-        if not self.viewer_3d.chain:
-            return
-            
-        # Creamos una lista de ceros para todos los elementos del robot
-        num_totales = len(self.viewer_3d.chain.links)
-        angulos_radianes = [0.0] * num_totales
-        
-        # Solo llenamos los que corresponden a nuestros sliders activos
-        for slider, label, joint_index in self.sliders:
-            grados = slider.value()
-            label.setText(f"Eje {self.viewer_3d.chain.links[joint_index].name}: {grados}°")
-            angulos_radianes[joint_index] = np.radians(grados)
-            
-        # Refrescar el visualizador 3D
-        self.viewer_3d.actualizar_posicion_visual(angulos_radianes)
+    # ==========================================
+    # EVENTOS DE TECLADO EN TIEMPO REAL (Interrupciones)
+    # ==========================================
+    def keyPressEvent(self, event):
+        # isAutoRepeat evita que el panel parpadee si dejas la tecla presionada mucho tiempo
+        if event.key() == Qt.Key_Shift and not event.isAutoRepeat():
+            self.panel_control.actualizar_estado_deadman(True)
+        super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event):
+        if event.key() == Qt.Key_Shift and not event.isAutoRepeat():
+            self.panel_control.actualizar_estado_deadman(False)
+        super().keyReleaseEvent(event)

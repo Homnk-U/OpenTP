@@ -82,20 +82,32 @@ class RobotViewer3D(QWidget):
                         caras = np.arange(vertices.shape[0]).reshape(-1, 3)
                         mesh_data = gl.MeshData(vertexes=vertices, faces=caras)
                         
-                        # 3. Colores industriales
+                        # 3. Colores y Configuración Específica por Pieza
+                        dibujar_aristas = False
+                        color_aristas = (0, 0, 0, 0)
+                        
                         if link.name == "Base link":
-                            color_mesh = (0.2, 0.2, 0.22, 1.0) # Gris oscuro base
-                        else:
-                            color_mesh = (0.96, 0.76, 0.13, 1.0) # Amarillo FANUC
+                            color_mesh = (0.4, 0.4, 0.42, 1.0) # Gris metálico 
                             
-                        # 4. Renderizado Seguro con 'shaded' y aristas de detalle
+                        elif link.name == "joint_6":
+                            color_mesh = (0.4, 0.4, 0.42, 1.0) # Gris metálico efector
+                            dibujar_aristas = True
+                            color_aristas = (0.2, 0.2, 0.2, 0.5) # Malla sutil oscura
+                            
+                        elif link.name == "joint_4":
+                            color_mesh = (0.4, 0.4, 0.42, 1.0) # Gris metálico junta 4
+                            
+                        else:
+                            color_mesh = (1.0, 0.85, 0.1, 1.0)   # Amarillo brillante
+                            
+                        # 4. Regresamos al renderizado CAD original
                         item = gl.GLMeshItem(
                             meshdata=mesh_data, 
-                            smooth=True, 
-                            drawEdges=True,                  # Encendemos las aristas para dar relieve mecánico
-                            edgeColor=(0.3, 0.2, 0.0, 0.3),  # Aristas oscuras y muy transparentes
+                            smooth=False,                        # Mantiene las caras planas y definidas
+                            drawEdges=dibujar_aristas, 
+                            edgeColor=color_aristas,
                             color=color_mesh,
-                            shader='shaded'                  # Sombreado dinámico básico
+                            shader='shaded'                      # <-- Regresamos a las sombras originales
                         )
                         
                         # Inyectar al lienzo
