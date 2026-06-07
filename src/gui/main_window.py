@@ -1,8 +1,9 @@
 import numpy as np
 from functools import partial
-from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QPushButton, QGroupBox, QLabel, QApplication
+from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QPushButton, QGroupBox, QLabel, QApplication, QTextEdit
 from PySide6.QtCore import Qt, QVariantAnimation, QEasingCurve
 from gui.widgets_3d import RobotViewer3D
+from core.tp_compiler import TPCompiler
 
 class PanelControlIndustrial(QWidget):
     def __init__(self, viewer_3d, parent=None):
@@ -12,6 +13,9 @@ class PanelControlIndustrial(QWidget):
         
         self.current_angles_deg = [0.0] * 6 
         self.deadman_activo = False # Variable de estado en tiempo real
+        # --- INICIALIZAR EL CEREBRO DEL COMPILADOR ---
+        self.compilador = TPCompiler()
+        self.siguiente_id_punto = 1 # Empezaremos grabando el P[1]
         
         estilo_botones_industrial = """
             QPushButton { 
@@ -38,6 +42,24 @@ class PanelControlIndustrial(QWidget):
             layout_tcp.addWidget(lbl)
             
         layout_principal.addWidget(grupo_tcp)
+        
+        # ==========================================
+        # 1.5 PANTALLA DEL iPendant (Editor de Código)
+        # ==========================================
+        grupo_editor = QGroupBox("Programa TP (Editor)")
+        layout_editor = QVBoxLayout(grupo_editor)
+        
+        self.editor_codigo = QTextEdit()
+        self.editor_codigo.setStyleSheet("background-color: white; color: black; font-family: Consolas; font-size: 14px;")
+        self.editor_codigo.setPlaceholderText("Ejemplo:\nJ P[1] 100% FINE\nJ P[2] 100% FINE")
+        layout_editor.addWidget(self.editor_codigo)
+        
+        self.btn_ejecutar = QPushButton("▶ EJECUTAR PROGRAMA (F3)")
+        self.btn_ejecutar.setStyleSheet("background-color: #28a745; color: white; font-weight: bold; padding: 10px;")
+        self.btn_ejecutar.clicked.connect(self.iniciar_secuencia_programa)
+        layout_editor.addWidget(self.btn_ejecutar)
+        
+        layout_principal.addWidget(grupo_editor)
 
         # ==========================================
         # 2. ZONA DE JOGGING Y BOTÓN HOME
@@ -77,6 +99,20 @@ class PanelControlIndustrial(QWidget):
         layout_principal.addWidget(grupo_jog)
         
         # ==========================================
+        # 2.5 ZONA DE MEMORIA Y COMPILADOR (TEACH)
+        # ==========================================
+        grupo_memoria = QGroupBox("Memoria de Puntos (Teach)")
+        layout_memoria = QVBoxLayout(grupo_memoria)
+        
+        self.btn_grabar_punto = QPushButton(f"Grabar P[{self.siguiente_id_punto}]")
+        # Estilo amarillo clásico de las teclas especiales de FANUC
+        self.btn_grabar_punto.setStyleSheet("background-color: #ffc107; color: black; font-weight: bold; padding: 8px; border-radius: 4px;")
+        self.btn_grabar_punto.clicked.connect(self.grabar_punto_actual)
+        
+        layout_memoria.addWidget(self.btn_grabar_punto)
+        layout_principal.addWidget(grupo_memoria)
+        
+        # ==========================================
         # 3. ZONA DE ENTRADAS DIGITALES
         # ==========================================
         grupo_di = QGroupBox("Entradas Digitales (DI)")
@@ -106,7 +142,7 @@ class PanelControlIndustrial(QWidget):
         # Inicializar cálculos de TCP
         self.actualizar_robot_y_tcp()
     
-    # ==========================================
+        # ==========================================
         # 5. MOTOR DE INTERPOLACIÓN DE TRAYECTORIAS
         # ==========================================
         self.animacion_movimiento = QVariantAnimation(self)
@@ -117,6 +153,13 @@ class PanelControlIndustrial(QWidget):
         
         # Cada que el reloj avanza, llama a nuestra función matemática
         self.animacion_movimiento.valueChanged.connect(self._ejecutar_paso_interpolacion)
+        
+        # Avisa cuando el robot llega a su destino para leer la siguiente línea
+        self.animacion_movimiento.finished.connect(self._procesar_siguiente_linea)
+        
+        # Variables para controlar la ejecución del programa
+        self.lineas_programa = []
+        self.linea_actual_idx = 0
         
         # Variables para recordar de dónde salimos y a dónde vamos
         self.angulos_inicio = [0.0] * 6
@@ -200,6 +243,82 @@ class PanelControlIndustrial(QWidget):
         self.lbl_tcp_x.setText(f"X: {x_m * 1000:8.2f} mm")
         self.lbl_tcp_y.setText(f"Y: {y_m * 1000:8.2f} mm")
         self.lbl_tcp_z.setText(f"Z: {z_m * 1000:8.2f} mm")
+        
+    def grabar_punto_actual(self):
+        """Toma la posición actual y la manda al disco duro del compilador"""
+        # 1. Mandar guardar al core
+        self.compilador.guardar_punto(self.siguiente_id_punto, self.current_angles_deg)
+        
+        # 2. Incrementar el contador (Para que el siguiente sea P[2], P[3]...)
+        self.siguiente_id_punto += 1
+        
+        # 3. Actualizar el texto del botón en la interfaz
+        self.btn_grabar_punto.setText(f"Grabar P[{self.siguiente_id_punto}]")
+        
+        # Opcional: Un pequeño destello verde en el botón para confirmar que se guardó
+        self.btn_grabar_punto.setStyleSheet("background-color: #28a745; color: white; font-weight: bold; padding: 8px; border-radius: 4px;")
+        
+        # Regresar el color al amarillo después de medio segundo usando un QTimer en línea
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(500, lambda: self.btn_grabar_punto.setStyleSheet("background-color: #ffc107; color: black; font-weight: bold; padding: 8px; border-radius: 4px;"))
+        
+    def iniciar_secuencia_programa(self):
+        """Lee el texto del editor y arranca el programa"""
+        if not self.deadman_activo:
+            self.lbl_deadman.setStyleSheet("color: #dc3545; font-weight: bold; background-color: #f8d7da; margin-top: 10px;")
+            return
+            
+        texto = self.editor_codigo.toPlainText()
+        # Separamos el texto línea por línea ignorando las vacías
+        self.lineas_programa = [linea.strip() for linea in texto.split('\n') if linea.strip()]
+        self.linea_actual_idx = 0
+        
+        if not self.lineas_programa:
+            return
+            
+        print("\n[TP] --- INICIANDO PROGRAMA ---")
+        self._procesar_siguiente_linea()
+
+    def _procesar_siguiente_linea(self):
+        """Lee la instrucción actual y mueve el robot. Si termina, lee la siguiente."""
+        if not self.deadman_activo:
+            print("[TP] Programa abortado: Se soltó el Deadman Switch.")
+            return
+
+        # Si ya leímos todas las líneas, el programa terminó
+        if self.linea_actual_idx >= len(self.lineas_programa):
+            print("[TP] --- FIN DEL PROGRAMA ---")
+            return
+            
+        linea_actual = self.lineas_programa[self.linea_actual_idx].upper()
+        self.linea_actual_idx += 1
+        
+        print(f"[TP] Ejecutando: {linea_actual}")
+        
+        # --- PARSEO BÁSICO ---
+        # Buscamos si la línea contiene un punto, por ejemplo "P[1]"
+        if "P[" in linea_actual:
+            inicio = linea_actual.find("P[")
+            fin = linea_actual.find("]", inicio) + 1
+            nombre_punto = linea_actual[inicio:fin]
+            
+            # Pedimos los ángulos a nuestra memoria (TPCompiler)
+            angulos_destino = self.compilador.obtener_punto(nombre_punto)
+            
+            if angulos_destino:
+                # Reciclamos tu motor de interpolación para ir a ese punto
+                self.angulos_inicio = list(self.current_angles_deg)
+                self.angulos_destino = angulos_destino
+                
+                self.animacion_movimiento.setStartValue(0.0)
+                self.animacion_movimiento.setEndValue(1.0)
+                self.animacion_movimiento.start()
+            else:
+                # Si el punto no existe, nos saltamos a la siguiente línea
+                self._procesar_siguiente_linea()
+        else:
+            # Si es un comando que no reconocemos, pasamos al siguiente
+            self._procesar_siguiente_linea()
 
 
 class MainWindow(QMainWindow):
