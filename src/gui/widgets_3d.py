@@ -23,7 +23,7 @@ class RobotViewer3D(QWidget):
         self.canvas.setBackgroundColor((40, 44, 52))
         self.layout_principal.addWidget(self.canvas, stretch=1) 
         
-        # --- Zona de Botones (Estilo GeoGebra/CAD) ---
+        # --- Zona de Botones ---
         self.toolbar_vista = QWidget()
         self.toolbar_vista.setFixedWidth(55) # Barra delgada
         self.toolbar_vista.setStyleSheet("background-color: #2c313a; border-left: 1px solid #1e2227;")
@@ -49,7 +49,7 @@ class RobotViewer3D(QWidget):
         
         # Aplicar estilo
         btn_home.setStyleSheet(style_btn)
-        btn_fit.setStyleSheet(style_btn + "font-size: 12px;") # Letra más pequeña para FIT
+        btn_fit.setStyleSheet(style_btn + "font-size: 12px;")
         btn_zoom_in.setStyleSheet(style_btn)
         btn_zoom_out.setStyleSheet(style_btn)
         
@@ -84,12 +84,11 @@ class RobotViewer3D(QWidget):
         eje_y = gl.GLLinePlotItem(pos=np.array([[0,0,0], [0,longitud_eje,0]]), color=(0,1,0,1), width=grosor, antialias=True)
         eje_z = gl.GLLinePlotItem(pos=np.array([[0,0,0], [0,0,longitud_eje]]), color=(0.2,0.6,1,1), width=grosor, antialias=True) 
         
-        # TRUCO CAD: Forzar que las líneas se dibujen encima del robot manipulando la profundidad
         for eje in (eje_x, eje_y, eje_z):
             eje.setDepthValue(1000) 
             self.canvas.addItem(eje)
         
-        # --- Letras Flotantes 3D (Estilo SolidEdge) ---
+        # --- Letras Flotantes 3D ---
         try:
             from pyqtgraph.opengl import GLTextItem
             fuente_ejes = QFont("Consolas", 8, QFont.Bold)
@@ -100,7 +99,7 @@ class RobotViewer3D(QWidget):
             lbl_z = GLTextItem(pos=[0, 0, longitud_eje + 0.15], text="Z", color=(100, 150, 255, 255), font=fuente_ejes)
             
             for lbl in (lbl_x, lbl_y, lbl_z):
-                lbl.setDepthValue(1000) # También forzamos el texto al frente
+                lbl.setDepthValue(1000)
                 self.canvas.addItem(lbl)
         except ImportError:
             print("[Advertencia] Versión de pyqtgraph no soporta GLTextItem.")
@@ -129,7 +128,7 @@ class RobotViewer3D(QWidget):
             self.view_home() # <-- Arrancamos viendo al robot de lejos
 
     # ==========================================
-    # CONTROL DE CÁMARA MEJORADO
+    # CONTROL DE CÁMARA
     # ==========================================
     def zoom_in(self):
         opts = self.canvas.opts
@@ -151,13 +150,13 @@ class RobotViewer3D(QWidget):
         # Un FANUC M-900iA encaja perfectamente en una distancia focal de ~5.5 metros.
         # Apuntamos el centro de la cámara exactamente a la mitad de su altura (Z=1.2 metros)
         self.canvas.setCameraPosition(
-            distance=5.5,                 # <-- El valor mágico para que ocupe toda la pantalla
-            elevation=opts['elevation'],  # Respetamos tu ángulo vertical actual
-            azimuth=opts['azimuth'],      # Respetamos tu ángulo horizontal actual
-            pos=QVector3D(0, 0, 1.2)      # Centrado en el "ombligo" del robot
+            distance=5.5,
+            elevation=opts['elevation'],
+            azimuth=opts['azimuth'],
+            pos=QVector3D(0, 0, 1.2)
         )
     # ==========================================
-    # CÓDIGO ORIGINAL INTACTO DE CARGA STL
+    # Superficies Lisas sin Facetas
     # ==========================================
     def cargar_mallas_principales(self):
         directorio_actual = os.path.dirname(os.path.abspath(__file__))
@@ -173,15 +172,23 @@ class RobotViewer3D(QWidget):
                 stl_path = os.path.join(base_path, mapeo_links[link.name])
                 if os.path.exists(stl_path):
                     try:
+                        # 1. Cargar el STL
                         stl_data = mesh.Mesh.from_file(stl_path)
-                        vertices = stl_data.vectors.reshape(-1, 3)
-                        caras = np.arange(vertices.shape[0]).reshape(-1, 3)
+                        
+                        # Fusionar vértices duplicados
+                        # Esto es necesario para que 'smooth=True' funcione en archivos STL
+                        raw_vectors = stl_data.vectors.reshape(-1, 3)
+                        rounded_vectors = np.round(raw_vectors, 6) 
+                        vertices, caras = np.unique(rounded_vectors, axis=0, return_inverse=True)
+                        caras = caras.reshape(-1, 3)
+                        
                         mesh_data = gl.MeshData(vertexes=vertices, faces=caras)
                         
                         dibujar_aristas = False
-                        color_aristas = (0, 0, 0, 0)
+                        color_aristas = (0.2, 0.2, 0.2, 0.5)
                         
-                        if link.name in ["Base link", "joint_6", "joint_4"]:
+                        # 3. Lógica de colores
+                        if link.name in ["Base link", "joint_6", "joint_4", "joint_2"]:
                             color_mesh = (0.4, 0.4, 0.42, 1.0) 
                             if link.name == "joint_6":
                                 dibujar_aristas = True
@@ -189,10 +196,17 @@ class RobotViewer3D(QWidget):
                         else:
                             color_mesh = (1.0, 0.85, 0.1, 1.0)
                             
+                        # 4. Inyectar con smooth=True y computeNormals=True
                         item = gl.GLMeshItem(
-                            meshdata=mesh_data, smooth=False, drawEdges=dibujar_aristas, 
-                            edgeColor=color_aristas, color=color_mesh, shader='shaded'
+                            meshdata=mesh_data, 
+                            smooth=True,
+                            computeNormals=True,
+                            drawEdges=dibujar_aristas, 
+                            edgeColor=color_aristas, 
+                            color=color_mesh, 
+                            shader='shaded'
                         )
+                        
                         self.canvas.addItem(item)
                         self.mallas_visuales.append({"item": item, "joint_index": i})
                     except Exception as e:

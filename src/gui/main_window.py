@@ -146,7 +146,7 @@ class PanelControlIndustrial(QWidget):
         # 5. MOTOR DE INTERPOLACIÓN DE TRAYECTORIAS
         # ==========================================
         self.animacion_movimiento = QVariantAnimation(self)
-        self.animacion_movimiento.setDuration(2000) # El viaje tomará exactamente 2 segundos (2000 ms)
+        self.animacion_movimiento.setDuration(3000) # El viaje tomará exactamente 2 segundos (2000 ms)
         
         # InOutQuad simula las rampas de aceleración y frenado de un servomotor real
         self.animacion_movimiento.setEasingCurve(QEasingCurve.InOutQuad) 
@@ -196,7 +196,6 @@ class PanelControlIndustrial(QWidget):
     def _ejecutar_paso_interpolacion(self, t):
         """Calcula los ángulos intermedios. 't' va de 0.0 a 1.0"""
         
-        # ¡FRENO DE EMERGENCIA INDUSTRIAL!
         # Si el operador suelta la tecla Shift durante el viaje automático, paramos los motores.
         if not self.deadman_activo:
             self.animacion_movimiento.stop()
@@ -306,7 +305,7 @@ class PanelControlIndustrial(QWidget):
             angulos_destino = self.compilador.obtener_punto(nombre_punto)
             
             if angulos_destino:
-                # Reciclamos tu motor de interpolación para ir a ese punto
+                # Reciclamos el motor de interpolación para ir a ese punto
                 self.angulos_inicio = list(self.current_angles_deg)
                 self.angulos_destino = angulos_destino
                 
@@ -346,7 +345,7 @@ class MainWindow(QMainWindow):
     # EVENTOS DE TECLADO EN TIEMPO REAL (Interrupciones)
     # ==========================================
     def keyPressEvent(self, event):
-        # isAutoRepeat evita que el panel parpadee si dejas la tecla presionada mucho tiempo
+        # isAutoRepeat evita que el panel parpadee si la tecla se deja presionada mucho tiempo
         if event.key() == Qt.Key_Shift and not event.isAutoRepeat():
             self.panel_control.actualizar_estado_deadman(True)
         super().keyPressEvent(event)
