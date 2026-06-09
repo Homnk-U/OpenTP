@@ -1,96 +1,95 @@
 import sys
-import os
 import time
+from pathlib import Path
 
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# Configuración del path del sistema
+DIRECTORIO_ACTUAL = Path(__file__).resolve().parent
+sys.path.append(str(DIRECTORIO_ACTUAL))
 
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt
+from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtWidgets import QApplication, QSplashScreen, QWidget
-from PySide6.QtGui import QPixmap, QColor
-from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve
 
-from gui.main_window import MainWindow
 from core.kinematics import probar_matematicas
+from gui.main_window import MainWindow
 
-def centrar_ventana(ventana, ancho, alto, app):
+# --- CONSTANTES GLOBALES ---
+ANCHO_APP = 1024
+ALTO_APP = 768
+DURACION_FADE_OUT_MS = 600
+TIEMPO_CARGA_S = 2.5
+
+def centrar_ventana(ventana: QWidget, ancho: int, alto: int, app: QApplication) -> None:
     """Calcula el centro de la pantalla actual y posiciona la ventana ahí."""
     pantalla = app.primaryScreen().geometry()
     x = (pantalla.width() - ancho) // 2
     y = (pantalla.height() - alto) // 2
     ventana.setGeometry(x, y, ancho, alto)
 
-def main():
+class CustomSplashScreen(QSplashScreen):
+    """Clase especializada para el Splash Screen"""
+    def __init__(self, ruta_logo: Path, app: QApplication):
+        # Creamos el lienzo transparente del tamaño de la app
+        lienzo = QPixmap(ANCHO_APP, ALTO_APP)
+        lienzo.fill(Qt.transparent)
+        
+        super().__init__(lienzo)
+        self.app = app
+        
+        # Configuración de ventana de la app
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint)
+        centrar_ventana(self, ANCHO_APP, ALTO_APP, self.app)
+        
+        # Contenedor para los bordes redondeados
+        self.contenedor = QWidget(self)
+        self.contenedor.setGeometry(0, 0, ANCHO_APP, ALTO_APP)
+        self._aplicar_estilos(ruta_logo)
+
+    def ejecutar_transicion_salida(self, ventana_principal: QWidget) -> None:
+        """Maneja la animación de desvanecimiento y da paso a la ventana principal."""
+        # Al usar 'self.animacion', aseguramos que el Garbage Collector no la destruya
+        self.animacion = QPropertyAnimation(self, b"windowOpacity")
+        self.animacion.setDuration(DURACION_FADE_OUT_MS)
+        self.animacion.setStartValue(1.0)
+        self.animacion.setEndValue(0.0)
+        self.animacion.setEasingCurve(QEasingCurve.OutQuad)
+        
+        def al_terminar():
+            ventana_principal.show()
+            self.finish(ventana_principal)
+            
+        self.animacion.finished.connect(al_terminar)
+        self.animacion.start()
+
+
+def main() -> None:
+    """Función principal que orquesta el ciclo de vida de la aplicación."""
     app = QApplication(sys.argv)
     
-    # Dimensiones exactas para ambas ventanas
-    ANCHO_APP = 1024
-    ALTO_APP = 768
+    # Definición de rutas usando pathlib (más limpio que os.path)
+    ruta_logo = DIRECTORIO_ACTUAL / "assets" / "icons" / "robot_fanuc.png"
     
-    ruta_base = os.path.dirname(os.path.abspath(__file__))
-    ruta_logo = os.path.join(ruta_base, "assets", "icons", "robot_fanuc.png")
-    
-    # --- 1. LIENZO TRANSPARENTE PARA EL SPLASH ---
-    # Creamos un fondo invisible del tamaño de la app para que no se asomen esquinas cuadradas
-    lienzo_transparente = QPixmap(ANCHO_APP, ALTO_APP)
-    lienzeno_vacio = lienzo_transparente.fill(Qt.transparent)
-    
-    splash = QSplashScreen(lienzo_transparente)
-    splash.setAttribute(Qt.WA_TranslucentBackground)
-    splash.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint)
-    
-    # Centramos el splash en el monitor
-    centrar_ventana(splash, ANCHO_APP, ALTO_APP, app)
-    
-    # --- 2. CONTENEDOR CON BORDES REDONDOS REALES ---
-    contenedor = QWidget(splash)
-    contenedor.setGeometry(0, 0, ANCHO_APP, ALTO_APP)
-    
-    # Si la imagen no existe, usamos un color plano oscuro
-    if not os.path.exists(ruta_logo):
-        contenedor.setStyleSheet(f"""
-            QWidget {{
-                background-color: #1e1e2e;
-                border-radius: 30px;
-            }}
-        """)
-    else:
-        # Ajustamos la imagen con CSS para que se adapte perfectamente al redondeado
-        contenedor.setStyleSheet(f"""
-            QWidget {{
-                background-image: url('{ruta_logo.replace('\\', "/")}');
-                background-position: center;
-                background-repeat: no-repeat;
-                border-radius: 30px;
-            }}
-        """)
-        
+    # 1. Inicializar y mostrar Splash
+    splash = CustomSplashScreen(ruta_logo, app)
     splash.show()
     app.processEvents()
     
-    # --- 3. CARGA DE BACKEND ---
+    # 2. Carga del Backend
     probar_matematicas()
-    time.sleep(2.5) # Tiempo de visualización
+    time.sleep(TIEMPO_CARGA_S) 
     
-    # --- 4. PREPARAR VENTANA PRINCIPAL ---
+    # 3. Preparar ventana principal
     window = MainWindow()
     window.resize(ANCHO_APP, ALTO_APP)
-    # Forzamos a la ventana principal a estar EXACTAMENTE en las mismas coordenadas que el splash
     centrar_ventana(window, ANCHO_APP, ALTO_APP, app)
     
-    # --- 5. ANIMACIÓN DE TRANSICIÓN (FADE OUT) ---
-    animacion = QPropertyAnimation(splash, b"windowOpacity")
-    animacion.setDuration(600) # 0.6 segundos de desvanecimiento suave
-    animacion.setStartValue(1.0)
-    animacion.setEndValue(0.0)
-    animacion.setEasingCurve(QEasingCurve.OutQuad)
+    # 4. Transición animada
+    splash.ejecutar_transicion_salida(window)
     
-    def al_terminar_animacion():
-        window.show()          # Aparece la ventana principal en el mismo lugar
-        splash.finish(window) # Destruye el splash
-        
-    animacion.finished.connect(al_terminar_animacion)
-    animacion.start()
-    
+    # Ejecución del bucle de eventos (Estilo Qt6)
     sys.exit(app.exec())
+
 
 if __name__ == "__main__":
     main()
