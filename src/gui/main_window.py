@@ -17,6 +17,9 @@ class PanelControlIndustrial(QWidget):
         self.deadman_activo = False 
         self.ultimos_angulos_seguros = list(self.current_angles_deg)
         
+        # Guardamos la referencia aquí para evitar que el Garbage Collector la borre
+        self.animacion_movimiento = None
+        
         # --- CEREBRO DEL COMPILADOR ---
         self.compilador = TPCompiler()
         self.siguiente_id_punto = 1 
@@ -32,7 +35,7 @@ class PanelControlIndustrial(QWidget):
         """
 
         # ==========================================
-        # 1. MONITOR DE ALARMAS Y COORDENADAS (PRIORIDAD ALTA)
+        # 1. MONITOR DE ALARMAS Y COORDENADAS (ALTA PRIORIDAD)
         # ==========================================
         group_posicion = QGroupBox("Avisos y Sistema (TCP)")
         group_posicion.setStyleSheet("QGroupBox { font-weight: bold; color: #50fa7b; }")
@@ -88,23 +91,21 @@ class PanelControlIndustrial(QWidget):
         layout_principal.addWidget(group_editor)
 
         # ==========================================
-        # 3. CONTROL MANUAL JOG (DISEÑO ULTRA-COMPACTO)
+        # 3. ZONA INFERIOR FUSIONADA (COLUMNA JOG + COLUMNA AUXILIAR)
         # ==========================================
+        layout_columnas_aux = QHBoxLayout()
+        layout_columnas_aux.setSpacing(6)
+
+        # ---- COLUMNA IZQUIERDA: Jog Manual Mini ----
         group_jog = QGroupBox("Jog Manual")
         layout_jog = QVBoxLayout(group_jog)
         layout_jog.setContentsMargins(4, 4, 4, 4)
         layout_jog.setSpacing(4)
         
-        # Botón Home optimizado con animación fluida
-        self.btn_home = QPushButton("IR A HOME (AUTOMÁTICO)")
-        self.btn_home.setStyleSheet("background-color: #007bff; color: white; font-weight: bold; padding: 5px; font-size: 10px;")
-        self.btn_home.clicked.connect(self.mover_a_home_animado)
-        layout_jog.addWidget(self.btn_home)
-        
         grid_ejes = QGridLayout()
-        grid_ejes.setSpacing(3)
+        grid_ejes.setSpacing(2)
         
-        ejes_labels = ["J1 (X)", "J2 (Y)", "J3 (Z)", "J4 (W)", "J5 (P)", "J6 (R)"]
+        ejes_labels = ["J1", "J2", "J3", "J4", "J5", "J6"]
         self.botones_jog = []
         
         for idx, nombre in enumerate(ejes_labels):
@@ -116,9 +117,8 @@ class PanelControlIndustrial(QWidget):
             btn_menos = QPushButton("-")
             btn_mas = QPushButton("+")
             
-            # Ajuste de tamaño minúsculo para ahorrar espacio en pantalla
-            btn_menos.setFixedSize(30, 22)
-            btn_mas.setFixedSize(30, 22)
+            btn_menos.setFixedSize(25, 20)
+            btn_mas.setFixedSize(25, 20)
             
             btn_menos.setAutoRepeat(True)
             btn_menos.setAutoRepeatDelay(200)   
@@ -131,8 +131,10 @@ class PanelControlIndustrial(QWidget):
             btn_menos.setStyleSheet(estilo_botones_industrial)
             btn_mas.setStyleSheet(estilo_botones_industrial)
             
-            btn_menos.clicked.connect(partial(self.jog_eje, idx, -2.0)) 
-            btn_mas.clicked.connect(partial(self.jog_eje, idx, 2.0))
+            # Límites originales del FANUC definidos por tu compañero
+            limites = [180, 75, 120, 360, 125, 360]
+            btn_menos.clicked.connect(partial(self.jog_eje, idx, -2.0, limites[idx])) 
+            btn_mas.clicked.connect(partial(self.jog_eje, idx, 2.0, limites[idx]))
             
             grid_ejes.addWidget(btn_menos, idx, 0)
             grid_ejes.addWidget(btn_mas, idx, 2)
@@ -140,39 +142,47 @@ class PanelControlIndustrial(QWidget):
             self.botones_jog.extend([btn_menos, btn_mas])
             
         layout_jog.addLayout(grid_ejes)
-        layout_principal.addWidget(group_jog)
+        layout_columnas_aux.addWidget(group_jog, stretch=1)
 
-        # ==========================================
-        # 4. TEACH Y SEÑALES AUXILIARES (MINIFICADOS)
-        # ==========================================
-        QHBoxLayout_aux = QHBoxLayout()
-        QHBoxLayout_aux.setSpacing(4)
+        # ---- COLUMNA DERECHA: Home + Teach + DI ----
+        panel_derecho_inputs = QWidget()
+        layout_inputs_v = QVBoxLayout(panel_derecho_inputs)
+        layout_inputs_v.setContentsMargins(0, 0, 0, 0)
+        layout_inputs_v.setSpacing(4)
+
+        # Botón HOME Cinemático
+        self.btn_home = QPushButton("IR A HOME")
+        self.btn_home.setStyleSheet("background-color: #007bff; color: white; font-weight: bold; padding: 6px; font-size: 10px;")
+        self.btn_home.clicked.connect(self.mover_a_home_animado)
+        layout_inputs_v.addWidget(self.btn_home)
         
         group_teach = QGroupBox("Teach")
         layout_teach = QVBoxLayout(group_teach)
         layout_teach.setContentsMargins(4, 4, 4, 4)
         self.btn_grab = QPushButton("Grabar P[1]")
-        self.btn_grab.setStyleSheet("background-color: #ffc107; color: black; font-weight: bold; padding: 4px; font-size: 10px;")
+        self.btn_grab.setStyleSheet("background-color: #ffc107; color: black; font-weight: bold; padding: 5px; font-size: 10px;")
         self.btn_grab.clicked.connect(self.grabar_posicion_actual)
         layout_teach.addWidget(self.btn_grab)
-        QHBoxLayout_aux.addWidget(group_teach, stretch=1)
+        layout_inputs_v.addWidget(group_teach)
         
-        group_di = QGroupBox("DI")
+        # [SOLUCIÓN AL CRASH]: El estilo visual blanco se aplica al QGroupBox, no a su layout interno invisible
+        group_di = QGroupBox("DI (Digital Inputs)")
+        group_di.setStyleSheet("QGroupBox { font-weight: bold; color: #fff; }")
         grid_di = QGridLayout(group_di)
-        group_di.setStyleSheet("QGroupBox { max-height: 45px; }")
-        grid_di.setContentsMargins(2, 2, 2, 2)
-        grid_di.setSpacing(2)
+        grid_di.setContentsMargins(4, 4, 4, 4)
+        grid_di.setSpacing(3)
         for i in range(4): 
             btn_di = QPushButton(f"{i+1}")
-            btn_di.setFixedSize(18, 16)
-            btn_di.setStyleSheet("font-size: 9px; background-color: #444; color: white; border-radius: 2px;")
+            btn_di.setFixedSize(20, 18)
+            btn_di.setStyleSheet("font-size: 9px; background-color: #444; color: white; border-radius: 2px; font-weight: bold;")
             grid_di.addWidget(btn_di, 0, i)
-        QHBoxLayout_aux.addWidget(group_di, stretch=1)
+        layout_inputs_v.addWidget(group_di)
         
-        layout_principal.addLayout(QHBoxLayout_aux)
+        layout_columnas_aux.addWidget(panel_derecho_inputs, stretch=1)
+        layout_principal.addLayout(layout_columnas_aux)
         
         # ==========================================
-        # 5. BARRA DE NOTIFICACIÓN DEADMAN
+        # 4. BARRA DE NOTIFICACIÓN DEADMAN
         # ==========================================
         self.lbl_status_deadman = QLabel("Deadman Switch")
         self.lbl_status_deadman.setFixedHeight(22)
@@ -185,7 +195,7 @@ class PanelControlIndustrial(QWidget):
     def actualizar_estado_deadman(self, activo):
         self.deadman_activo = activo
         self.actualizar_interfaz_por_deadman()
-        if not self.deadman_activo and hasattr(self, 'animacion_movimiento'):
+        if not self.deadman_activo and self.animacion_movimiento:
             if self.animacion_movimiento.state() == QVariantAnimation.State.Running:
                 self.animacion_movimiento.stop()
 
@@ -203,10 +213,13 @@ class PanelControlIndustrial(QWidget):
             self.lbl_status_deadman.setText("⚠️ DEADMAN LIBERADO [SHIFT]")
             self.lbl_status_deadman.setStyleSheet("background-color: #dc3545; color: white; font-weight: bold; font-size: 10px; border-radius: 3px;")
 
-    def jog_eje(self, joint_idx, delta_deg):
+    def jog_eje(self, joint_idx, delta_deg, limite_max):
         if not self.deadman_activo:
             return
-        self.current_angles_deg[joint_idx] += delta_deg
+        nuevo_angulo = self.current_angles_deg[joint_idx] + delta_deg
+        if abs(nuevo_angulo) > limite_max:
+            return
+        self.current_angles_deg[joint_idx] = nuevo_angulo
         self.actualizar_robot_y_tcp()
 
     def grabar_posicion_actual(self):
@@ -219,52 +232,52 @@ class PanelControlIndustrial(QWidget):
     def siguiente_id_point_or_num(self):
         return self.siguiente_id_punto
 
-    # [NUEVA FUNCIÓN]: Animación fluida para volver a HOME eslabón por eslabón
     def mover_a_home_animado(self):
         if not self.deadman_activo:
             return
             
-        # Configuramos una interpolación de variantes de Qt para ir de los ángulos actuales a 0
         self.animacion_movimiento = QVariantAnimation(self)
-        self.animacion_movimiento.setDuration(1200) # Duración del viaje a casa (1.2 segundos)
-        self.animacion_movimiento.setStartValue(self.current_angles_deg)
-        self.animacion_movimiento.setEndValue([0.0] * 6)
-        self.animacion_movimiento.setEasingCurve(QEasingCurve.Type.InOutCubic) # Interpolación cúbica ultra suave
+        self.animacion_movimiento.setDuration(1500) 
+        self.animacion_movimiento.setStartValue(0.0)
+        self.animacion_movimiento.setEndValue(1.0)
+        self.animacion_movimiento.setEasingCurve(QEasingCurve.Type.InOutCubic) 
         
-        def interpolar_home(valores):
+        angulos_inicio = list(self.current_angles_deg)
+        
+        def interpolar_home(t):
             if not self.deadman_activo:
                 self.animacion_movimiento.stop()
                 return
-            self.current_angles_deg = list(valores)
+            for i in range(6):
+                distancia = 0.0 - angulos_inicio[i]
+                self.current_angles_deg[i] = angulos_inicio[i] + (t * distancia)
             self.actualizar_robot_y_tcp()
             
         self.animacion_movimiento.valueChanged.connect(interpolar_home)
         self.animacion_movimiento.start()
 
+    # [RESTAURACIÓN FIEL DEL BACKEND]: Mapeo exacto vector_full[1:7] de la cadena original
     def actualizar_robot_y_tcp(self):
         if not self.viewer_3d.chain:
             return
 
-        angulos_rad = [0.0] * len(self.viewer_3d.chain.links)
-        contador = 0
-        for i, link in enumerate(self.viewer_3d.chain.links):
-            name_lower = link.name.lower()
-            if "base" in name_lower or "flange" in name_lower or "tool" in name_lower or "world" in name_lower:
-                continue
-            if contador < len(self.current_angles_deg):
-                angulos_rad[i] = np.radians(self.current_angles_deg[contador])
-                contador += 1
+        angulos_rad = np.radians(self.current_angles_deg)
+        len_cadena = len(self.viewer_3d.chain.links)
+        vector_full = [0.0] * len_cadena
+        vector_full[1:7] = angulos_rad # Mapeo exacto del robot_fanuc.urdf de tu compañero
 
-        matriz_homogena = self.viewer_3d.chain.forward_kinematics(angulos_rad)
+        # Cálculo unificado de Cinemática Directa 4x4
+        matriz_homogena = self.viewer_3d.chain.forward_kinematics(vector_full)
         x_mm = matriz_homogena[0, 3] * 1000
         y_mm = matriz_homogena[1, 3] * 1000
         z_mm = matriz_homogena[2, 3] * 1000
 
+        # Alarma de proximidad del suelo simulado
         if z_mm < 15.0: 
             self.lbl_alarma.setText("⚠️ ALARMA SUELO")
             self.lbl_alarma.setStyleSheet("background-color: #dc3545; color: white; font-weight: bold; font-family: 'Consolas'; font-size: 11px; padding: 4px 8px; border-radius: 4px;")
             
-            if hasattr(self, 'animacion_movimiento') and self.animacion_movimiento.state() == QVariantAnimation.State.Running:
+            if self.animacion_movimiento and self.animacion_movimiento.state() == QVariantAnimation.State.Running:
                 self.animacion_movimiento.stop()
                 
             self.current_angles_deg = list(self.ultimos_angulos_seguros)
@@ -274,7 +287,8 @@ class PanelControlIndustrial(QWidget):
         self.lbl_alarma.setStyleSheet("background-color: #1e7e34; color: white; font-weight: bold; font-family: 'Consolas'; font-size: 11px; padding: 4px 8px; border-radius: 4px;")
         self.ultimos_angulos_seguros = list(self.current_angles_deg)
 
-        self.viewer_3d.actualizar_posicion_visual(angulos_rad)
+        # Renderizado síncrono ultra-veloz
+        self.viewer_3d.actualizar_posicion_visual(vector_full)
         
         self.lbl_x.setText(f"X: {x_mm:.2f}")
         self.lbl_y.setText(f"Y: {y_mm:.2f}")
@@ -303,17 +317,22 @@ class PanelControlIndustrial(QWidget):
         if not self.deadman_activo or self.indice_linea_actual >= len(self.lineas_a_ejecutar):
             return
         punto_destino = self.lineas_a_ejecutar[self.indice_linea_actual]
+        
         self.animacion_movimiento = QVariantAnimation(self)
         self.animacion_movimiento.setDuration(1500)
-        self.animacion_movimiento.setStartValue(self.current_angles_deg)
-        self.animacion_movimiento.setEndValue(punto_destino)
+        self.animacion_movimiento.setStartValue(0.0)
+        self.animacion_movimiento.setEndValue(1.0)
         self.animacion_movimiento.setEasingCurve(QEasingCurve.Type.InOutQuad)
         
-        def interpolar_valores(valores):
+        angulos_inicio = list(self.current_angles_deg)
+        
+        def interpolar_valores(t):
             if not self.deadman_activo:
                 self.animacion_movimiento.stop()
                 return
-            self.current_angles_deg = list(valores)
+            for i in range(6):
+                distancia = punto_destino[i] - angulos_inicio[i]
+                self.current_angles_deg[i] = angulos_inicio[i] + (t * distancia)
             self.actualizar_robot_y_tcp()
             
         self.animacion_movimiento.valueChanged.connect(interpolar_valores)
