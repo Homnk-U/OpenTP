@@ -63,23 +63,49 @@ class RobotViewer3D(QWidget):
         
         self.layout_principal.addWidget(self.toolbar_vista)
 
-        # ==========================================
-        # 2. ENTORNO 3D (Piso y Coordenadas) - CORRECCIÓN DE INDENTACIÓN
+# ==========================================
+        # 2. ENTORNO 3D (Piso y Coordenadas con Letras)
         # ==========================================
         grid = gl.GLGridItem()
         grid.setSize(x=10, y=10, z=10)
         grid.setSpacing(x=0.5, y=0.5, z=0.5)
         self.canvas.addItem(grid)
         
-        # Crear Eje del Origen (World Frame)
+        # Fuente compacta para las etiquetas industriales
+        fuente_ejes = QFont("Consolas", 10, QFont.Weight.Bold)
+        
+        # --- CONFIGURACIÓN ORIGEN (WORLD) ---
         self.eje_origen = gl.GLAxisItem()
-        self.eje_origen.setSize(x=0.5, y=0.5, z=0.5) 
+        self.eje_origen.setSize(x=0.6, y=0.6, z=0.6)
+        # Desplazamos un milímetro en Z para evitar el z-fighting (parpadeo) con el piso gris
+        self.eje_origen.translate(0, 0, 0.001)
         self.canvas.addItem(self.eje_origen)
         
-        # Crear Eje del Gripper (Tool Frame / TCP)
+        # Letras para el Origen
+        self.txt_w_x = gl.GLTextItem(text="X (World)", font=fuente_ejes, color=(255, 100, 100, 255))
+        self.txt_w_y = gl.GLTextItem(text="Y (World)", font=fuente_ejes, color=(100, 255, 100, 255))
+        self.txt_w_z = gl.GLTextItem(text="Z (World)", font=fuente_ejes, color=(100, 100, 255, 255))
+        
+        # Posicionamos las letras en las puntas de los vectores del origen
+        self.txt_w_x.setData(pos=np.array([0.6, 0.0, 0.0]))
+        self.txt_w_y.setData(pos=np.array([0.0, 0.6, 0.0]))
+        self.txt_w_z.setData(pos=np.array([0.0, 0.0, 0.6]))
+        
+        for txt in [self.txt_w_x, self.txt_w_y, self.txt_w_z]:
+            self.canvas.addItem(txt)
+        
+        # --- CONFIGURACIÓN GRIPPER (TOOL/TCP) ---
         self.eje_gripper = gl.GLAxisItem()
-        self.eje_gripper.setSize(x=0.3, y=0.3, z=0.3) 
+        self.eje_gripper.setSize(x=0.4, y=0.4, z=0.4) 
         self.canvas.addItem(self.eje_gripper)
+        
+        # Letras para el Gripper
+        self.txt_t_x = gl.GLTextItem(text="X (Tool)", font=fuente_ejes, color=(255, 50, 50, 255))
+        self.txt_t_y = gl.GLTextItem(text="Y (Tool)", font=fuente_ejes, color=(50, 255, 50, 255))
+        self.txt_t_z = gl.GLTextItem(text="Z (Tool)", font=fuente_ejes, color=(50, 50, 255, 255))
+        
+        for txt in [self.txt_t_x, self.txt_t_y, self.txt_t_z]:
+            self.canvas.addItem(txt)
 
         # ==========================================
         # 3. CARGA DE CINEMÁTICA Y MALLAS
@@ -166,17 +192,43 @@ class RobotViewer3D(QWidget):
 
     def alternar_visibilidad_ejes(self, mostrar_origen, mostrar_gripper):
         self.eje_origen.setVisible(mostrar_origen)
+        self.txt_w_x.setVisible(mostrar_origen)
+        self.txt_w_y.setVisible(mostrar_origen)
+        self.txt_w_z.setVisible(mostrar_origen)
+        
         self.eje_gripper.setVisible(mostrar_gripper)
+        self.txt_t_x.setVisible(mostrar_gripper)
+        self.txt_t_y.setVisible(mostrar_gripper)
+        self.txt_t_z.setVisible(mostrar_gripper)
 
+
+    # MÉTODO ACTUALIZADO: Hace que las letras del Gripper viajen y roten junto al robot
     def actualizar_posicion_visual(self, joints_angles):
         if not self.chain:
             return
             
         transformaciones = self.chain.forward_kinematics(joints_angles, full_kinematics=True)
         
+        # Mover las mallas del robot
         for malla in self.mallas_visuales:
             idx = malla["joint_index"]
             malla["item"].setTransform(transformaciones[idx])
             
+        # Orientar y posicionar el eje físico del Gripper (Brida/Link 6)
         matriz_tcp = transformaciones[-1]
         self.eje_gripper.setTransform(matriz_tcp)
+        
+        # Extraer la posición XYZ actual de la matriz para colocar las letras flotantes
+        pos_tcp = matriz_tcp[:3, 3] # Coordenadas en metros (x, y, z) de la punta
+        rot_tcp = matriz_tcp[:3, :3] # Matriz de rotación 3x3 del gripper
+        
+        # Calculamos la posición de las puntas de los vectores del gripper rotados en el espacio
+        # Tamaño del vector del gripper = 0.4 metros
+        offset_x = pos_tcp + rot_tcp.dot([0.4, 0.0, 0.0])
+        offset_y = pos_tcp + rot_tcp.dot([0.0, 0.4, 0.0])
+        offset_z = pos_tcp + rot_tcp.dot([0.0, 0.0, 0.4])
+        
+        # Actualizamos las posiciones de las etiquetas en tiempo real
+        self.txt_t_x.setData(pos=offset_x)
+        self.txt_t_y.setData(pos=offset_y)
+        self.txt_t_z.setData(pos=offset_z)
