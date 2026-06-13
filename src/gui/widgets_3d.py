@@ -111,8 +111,11 @@ class RobotViewer3D(QWidget):
         btn_zoom_out = QPushButton()
         btn_zoom_out.setIcon(QIcon(os.path.join(icons_path, "zoom_out.svg")))
         
-        for btn in (btn_home, btn_fit, btn_zoom_in, btn_zoom_out):
-            btn.setStyleSheet(style_btn)
+        self.btn_info = QPushButton()
+        self.btn_info.setIcon(QIcon(os.path.join(icons_path, "info.svg"))) 
+        
+        for btn in (btn_home, btn_fit, btn_zoom_in, btn_zoom_out, self.btn_info):
+            btn.setStyleSheet(btn.styleSheet() + style_btn) # Mantiene el estilo base
             btn.setIconSize(QSize(24, 24)) 
             btn.setFixedSize(45, 45)       
             layout_toolbar.addWidget(btn)
@@ -191,40 +194,113 @@ class RobotViewer3D(QWidget):
     # CARGA DE STL
     # ==========================================
     def cargar_mallas_principales(self):
-        directorio_actual = os.path.dirname(os.path.abspath(__file__))
-        base_path = os.path.abspath(os.path.join(directorio_actual, "..", "assets", "models", "meshes"))
-        mapeo_links = {"Base link": "base_link.stl", "joint_1": "link_1.stl", "joint_2": "link_2.stl", "joint_3": "link_3.stl", "joint_4": "link_4.stl", "joint_5": "link_5.stl", "joint_6": "link_6.stl"}
-        
-        for i, link in enumerate(self.chain.links):
-            if link.name in mapeo_links:
-                stl_path = os.path.join(base_path, mapeo_links[link.name])
-                if os.path.exists(stl_path):
-                    try:
-                        stl_data = mesh.Mesh.from_file(stl_path)
-                        raw_vectors = stl_data.vectors.reshape(-1, 3)
-                        rounded_vectors = np.round(raw_vectors, 6) 
-                        vertices, caras = np.unique(rounded_vectors, axis=0, return_inverse=True)
-                        caras = caras.reshape(-1, 3)
-                        mesh_data = gl.MeshData(vertexes=vertices, faces=caras)
-                        
-                        dibujar_aristas = False
-                        color_aristas = (0.2, 0.2, 0.2, 0.5)
-                        
-                        if link.name in ["Base link", "joint_6", "joint_4", "joint_2"]:
-                            color_mesh = (0.4, 0.4, 0.42, 1.0) 
-                            if link.name == "joint_6":
-                                dibujar_aristas = True
-                        else:
-                            color_mesh = (1.0, 0.85, 0.1, 1.0)
+            directorio_actual = os.path.dirname(os.path.abspath(__file__))
+            base_path = os.path.abspath(os.path.join(directorio_actual, "..", "assets", "models", "meshes"))
+            mapeo_links = {
+                "Base link": "base_link.stl", 
+                "joint_1": "link_1.stl", 
+                "joint_2": "link_2.stl", 
+                "joint_3": "link_3.stl", 
+                "joint_4": "link_4.stl", 
+                "joint_5": "link_5.stl", 
+                "joint_6": "link_6.stl"
+            }
+            
+            for i, link in enumerate(self.chain.links):
+                if link.name in mapeo_links:
+                    stl_path = os.path.join(base_path, mapeo_links[link.name])
+                    if os.path.exists(stl_path):
+                        try:
+                            stl_data = mesh.Mesh.from_file(stl_path)
+                            raw_vectors = stl_data.vectors.reshape(-1, 3)
+                            rounded_vectors = np.round(raw_vectors, 6) 
+                            vertices, caras = np.unique(rounded_vectors, axis=0, return_inverse=True)
+                            caras = caras.reshape(-1, 3)
+                            mesh_data = gl.MeshData(vertexes=vertices, faces=caras)
                             
-                        item = gl.GLMeshItem(meshdata=mesh_data, smooth=True, computeNormals=True, drawEdges=dibujar_aristas, edgeColor=color_aristas, color=color_mesh, shader='shaded')
-                        self.canvas.addItem(item)
-                        self.mallas_visuales.append({"item": item, "joint_index": i})
-                    except Exception as e:
-                        print(f"Error cargando {link.name}: {e}")
+                            dibujar_aristas = False
+                            color_aristas = (0.2, 0.2, 0.2, 0.5)
+                            
+                            if link.name in ["Base link", "joint_6", "joint_4", "joint_2"]:
+                                color_mesh = (0.4, 0.4, 0.42, 1.0) 
+                                if link.name == "joint_6":
+                                    dibujar_aristas = True
+                            else:
+                                color_mesh = (1.0, 0.85, 0.1, 1.0)
+                                
+                            item = gl.GLMeshItem(meshdata=mesh_data, smooth=True, computeNormals=True, 
+                                                drawEdges=dibujar_aristas, edgeColor=color_aristas, 
+                                                color=color_mesh, shader='shaded')
+                            self.canvas.addItem(item)
+                            self.mallas_visuales.append({"item": item, "joint_index": i})
+                        except Exception as e:
+                            print(f"Error cargando {link.name}: {e}")
+                            
+            # Crear geométricamente la ventosa
+            try:
+                # 1. Vástago: longitud 0.04
+                md_cuerpo = gl.MeshData.cylinder(rows=10, cols=20, radius=[0.015, 0.015], length=0.04)
+                self.item_ventosa_cuerpo = gl.GLMeshItem(meshdata=md_cuerpo, smooth=True, color=(0.6, 0.6, 0.6, 1.0), shader='shaded')
+                
+                # 2. Copa (Paredes laterales): Más grande, se abre hasta 0.08 (8 cm)
+                # Color inicial: Rojo (0.8, 0.1, 0.1)
+                md_copa = gl.MeshData.cylinder(rows=10, cols=30, radius=[0.015, 0.08], length=0.035)
+                self.item_ventosa_copa = gl.GLMeshItem(meshdata=md_copa, smooth=True, color=(0.8, 0.1, 0.1, 1.0), shader='shaded')
+                
+                # 3. Tapa frontal: Cierra la copa reduciendo el radio de 0.08 a 0.0 para que se vea "rellena"
+                md_tapa = gl.MeshData.cylinder(rows=2, cols=30, radius=[0.08, 0.0], length=0.001)
+                self.item_ventosa_tapa = gl.GLMeshItem(meshdata=md_tapa, smooth=True, color=(0.8, 0.1, 0.1, 1.0), shader='shaded')
+                
+                self.canvas.addItem(self.item_ventosa_cuerpo)
+                self.canvas.addItem(self.item_ventosa_copa)
+                self.canvas.addItem(self.item_ventosa_tapa)
+            except Exception as e:
+                print(f"[VENTOSA ERROR] No se pudo inicializar la geometría: {e}")
 
     def actualizar_posicion_visual(self, joints_angles):
         if not self.chain or not self.mallas_visuales: return
         transformaciones = self.chain.forward_kinematics(joints_angles, full_kinematics=True)
+        
+        # Mover las mallas del robot (J1 a J6)
         for malla in self.mallas_visuales:
             malla["item"].setTransform(transformaciones[malla["joint_index"]])
+            
+        # Mover la ventosa acoplada rígidamente al extremo final
+        if hasattr(self, 'item_ventosa_cuerpo') and hasattr(self, 'item_ventosa_copa'):
+            matriz_final = transformaciones[-3] # El plato de acoplamiento
+            
+            # 1. Rotación 90° en Y para que apunte al frente
+            angulo = np.pi / 2
+            rotacion_ajuste = np.array([
+                [np.cos(angulo),  0, np.sin(angulo), 0],
+                [0,               1, 0,              0],
+                [-np.sin(angulo), 0, np.cos(angulo), 0],
+                [0,               0, 0,              1]
+            ])
+            
+            # 2. AJUSTE DE BRECHA
+            ajuste_brecha = np.eye(4)
+            ajuste_brecha[2, 3] = -0.045 
+            
+            # Matriz del cuerpo
+            matriz_cuerpo = np.dot(matriz_final, np.dot(rotacion_ajuste, ajuste_brecha))
+            self.item_ventosa_cuerpo.setTransform(matriz_cuerpo)
+            
+            # Matriz de la copa (se desplaza la longitud del vástago: 0.04)
+            desplazamiento_copa = np.eye(4)
+            desplazamiento_copa[2, 3] = 0.04 
+            matriz_copa = np.dot(matriz_cuerpo, desplazamiento_copa)
+            self.item_ventosa_copa.setTransform(matriz_copa)
+            
+            # Matriz de la tapa (se desplaza la longitud del vástago + la longitud de la copa: 0.04 + 0.035)
+            desplazamiento_tapa = np.eye(4)
+            desplazamiento_tapa[2, 3] = 0.075
+            matriz_tapa = np.dot(matriz_cuerpo, desplazamiento_tapa)
+            self.item_ventosa_tapa.setTransform(matriz_tapa)
+
+    def set_vacio_visual_state(self, activo):
+        if hasattr(self, 'item_ventosa_copa') and hasattr(self, 'item_ventosa_tapa'):
+            # Verde si está activo, Rojo si está desactivado
+            color = (0.0, 0.8, 0.2, 1.0) if activo else (0.8, 0.1, 0.1, 1.0)
+            self.item_ventosa_copa.setColor(color)
+            self.item_ventosa_tapa.setColor(color)

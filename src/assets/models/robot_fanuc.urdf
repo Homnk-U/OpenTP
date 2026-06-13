@@ -237,5 +237,6 @@
     <parent link="flange"/>
     <child link="tool0"/>
   </joint>
+
 </robot>
 
