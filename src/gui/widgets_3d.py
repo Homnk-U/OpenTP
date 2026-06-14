@@ -1,5 +1,6 @@
 import os
 import numpy as np
+from OpenGL.GL import glLineWidth, GL_LINE_STRIP
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QVector3D, QFont
@@ -7,6 +8,23 @@ import pyqtgraph.opengl as gl
 import ikpy.chain
 from stl import mesh
 
+class GLAxisItemIndustrial(gl.GLAxisItem):
+    def __init__(self, size=None, width=3.0):
+        """
+        width: Grosor de las líneas en píxeles (por defecto 3.0 para que sea bien visible)
+        """
+        super().__init__(size)
+        self.grosor_linea = width
+
+    def paint(self):
+        # 1. Configurar el grosor personalizado en la GPU antes de pintar
+        glLineWidth(self.grosor_linea)
+        
+        # 2. Llamar al método original para que dibuje las líneas de colores
+        super().paint()
+        
+        # 3. Restaurar el grosor por defecto (1.0) para no afectar a la cuadrícula gris
+        glLineWidth(1.0)
 class RobotViewer3D(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -63,7 +81,7 @@ class RobotViewer3D(QWidget):
         
         self.layout_principal.addWidget(self.toolbar_vista)
 
-# ==========================================
+        # ==========================================
         # 2. ENTORNO 3D (Piso y Coordenadas con Letras)
         # ==========================================
         grid = gl.GLGridItem()
@@ -71,39 +89,36 @@ class RobotViewer3D(QWidget):
         grid.setSpacing(x=0.5, y=0.5, z=0.5)
         self.canvas.addItem(grid)
         
-        # Fuente compacta para las etiquetas industriales
+        # Fuente para las etiquetas industriales
         fuente_ejes = QFont("Consolas", 10, QFont.Weight.Bold)
         
         # --- CONFIGURACIÓN ORIGEN (WORLD) ---
-        self.eje_origen = gl.GLAxisItem()
+        # ¡REEMPLAZADO!: Ahora usamos la clase industrial con grosor 3.5
+        self.eje_origen = GLAxisItemIndustrial(width=3.5)
         self.eje_origen.setSize(x=0.6, y=0.6, z=0.6)
-        # Desplazamos un milímetro en Z para evitar el z-fighting (parpadeo) con el piso gris
-        self.eje_origen.translate(0, 0, 0.001)
+        self.eje_origen.translate(0, 0, 0.001) # Evita parpadeo con el suelo
         self.canvas.addItem(self.eje_origen)
         
-        # Letras para el Origen
+        # Letras para el Origen (permanecen igual...)
         self.txt_w_x = gl.GLTextItem(text="X (World)", font=fuente_ejes, color=(255, 100, 100, 255))
         self.txt_w_y = gl.GLTextItem(text="Y (World)", font=fuente_ejes, color=(100, 255, 100, 255))
         self.txt_w_z = gl.GLTextItem(text="Z (World)", font=fuente_ejes, color=(100, 100, 255, 255))
-        
-        # Posicionamos las letras en las puntas de los vectores del origen
         self.txt_w_x.setData(pos=np.array([0.6, 0.0, 0.0]))
         self.txt_w_y.setData(pos=np.array([0.0, 0.6, 0.0]))
         self.txt_w_z.setData(pos=np.array([0.0, 0.0, 0.6]))
-        
         for txt in [self.txt_w_x, self.txt_w_y, self.txt_w_z]:
             self.canvas.addItem(txt)
         
         # --- CONFIGURACIÓN GRIPPER (TOOL/TCP) ---
-        self.eje_gripper = gl.GLAxisItem()
+        # ¡REEMPLAZADO!: Eje del gripper robusto con grosor 3.0
+        self.eje_gripper = GLAxisItemIndustrial(width=3.0)
         self.eje_gripper.setSize(x=0.4, y=0.4, z=0.4) 
         self.canvas.addItem(self.eje_gripper)
         
-        # Letras para el Gripper
+        # Letras para el Gripper (permanecen igual...)
         self.txt_t_x = gl.GLTextItem(text="X (Tool)", font=fuente_ejes, color=(255, 50, 50, 255))
         self.txt_t_y = gl.GLTextItem(text="Y (Tool)", font=fuente_ejes, color=(50, 255, 50, 255))
         self.txt_t_z = gl.GLTextItem(text="Z (Tool)", font=fuente_ejes, color=(50, 50, 255, 255))
-        
         for txt in [self.txt_t_x, self.txt_t_y, self.txt_t_z]:
             self.canvas.addItem(txt)
 
