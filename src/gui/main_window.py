@@ -61,6 +61,7 @@ class PanelControlIndustrial(QWidget):
                 
                 self.caja_visual = gl.GLMeshItem(meshdata=md_caja, smooth=False, color=(0.8, 0.5, 0.2, 1.0), shader='shaded')
                 self.viewer_3d.canvas.addItem(self.caja_visual)
+                self.caja_visual.setVisible(True) # La caja inicia oculta
             else:
                 print("[ADVERTENCIA] No se encontró caja.stl. Verifica la ruta.")
         except Exception as e:
@@ -69,7 +70,7 @@ class PanelControlIndustrial(QWidget):
         # Matriz inicial de la caja 
         self.matriz_caja_mundo = np.eye(4)
         self.matriz_caja_mundo[0, 3] = 1.35  
-        self.matriz_caja_mundo[2, 3] = 0.15  
+        self.matriz_caja_mundo[2, 3] = 0.0
         
         if hasattr(self, 'caja_visual'):
             self.caja_visual.setTransform(self.matriz_caja_mundo)
@@ -120,7 +121,7 @@ class PanelControlIndustrial(QWidget):
         self.btn_ejecutar.clicked.connect(self.iniciar_secuencia_programa)
         layout_editor.addWidget(self.btn_ejecutar)
         
-        self.btn_demo = QPushButton("🔁 DEMO PICK & PLACE")
+        self.btn_demo = QPushButton("DEMO PICK & PLACE")
         self.btn_demo.setStyleSheet("background-color: #17a2b8; color: white; font-weight: bold; padding: 10px; border-radius: 4px;")
         self.btn_demo.clicked.connect(self.iniciar_demo)
         layout_editor.addWidget(self.btn_demo)
@@ -208,7 +209,7 @@ class PanelControlIndustrial(QWidget):
         
         for i in range(6):
             if angulos[i] < limites[i][0] or angulos[i] > limites[i][1]:
-                print(f"⚠️ [DCS] Límite mecánico superado en J{i+1}: {angulos[i]:.1f}°")
+                print(f"[DCS] Límite mecánico superado en J{i+1}: {angulos[i]:.1f}°")
                 return False
 
         # 2. CARTESIAN SAFETY ZONE (Colisión con el piso o su propia base)
@@ -226,13 +227,13 @@ class PanelControlIndustrial(QWidget):
                 
                 # Regla de Piso: Absolutamente nada puede bajar de 5 centímetros
                 if z < 0.05:
-                    print(f"⚠️ [DCS] Riesgo de colisión con el suelo (Z={z:.2f}m)")
+                    print(f"[DCS] Riesgo de colisión con el suelo (Z={z:.2f}m)")
                     return False
                     
                 # Regla de Base: El brazo no puede meterse a su propia base de hierro
                 radio = np.sqrt(x**2 + y**2)
                 if radio < 0.40 and z < 0.8:
-                    print("⚠️ [DCS] Riesgo de auto-colisión con la base detectado.")
+                    print("[DCS] Riesgo de auto-colisión con la base detectado.")
                     return False
                     
         return True
@@ -276,7 +277,7 @@ class PanelControlIndustrial(QWidget):
             # Abortamos trayectoria y mandamos a Emergencia
             self.animacion_movimiento.stop()
             self.detener_demo()
-            print("🛑 [CRITICAL STOP] Trayectoria automática abortada por violación de límites.")
+            print("[CRITICAL STOP] Trayectoria automática abortada por violación de límites.")
             self.paro_emergencia_activo = True
             QTimer.singleShot(1500, lambda: setattr(self, 'paro_emergencia_activo', False))
 
@@ -288,55 +289,66 @@ class PanelControlIndustrial(QWidget):
             self.actualizar_estado_deadman(True) 
             
         self.modo_operacion = "AUTOMÁTICO (DEMO)"
-        self.btn_demo.setText("⏹ DETENER DEMO")
+        self.btn_demo.setText("DETENER DEMO")
         self.btn_demo.setStyleSheet("background-color: #dc3545; color: white; font-weight: bold; padding: 10px; border-radius: 4px;")
         self.btn_demo.clicked.disconnect()
         self.btn_demo.clicked.connect(self.detener_demo)
         
+        # 1. Hacemos visible la caja al arrancar la demo
+        if hasattr(self, 'caja_visual'):
+            self.caja_visual.setVisible(True)
+            
+        self.vacio_activo = False
+        self.caja_agarrada = False
         self.tiempo_inicio_ciclo = time.time()
         
+        # ==========================================================
+        # TEACH BY DEMONSTRATION
+        # ==========================================================
+        # Tus puntos exactos:
+        J_PICK = [0.0, 2.0, -62.0, 0.0, -26.0, 0.0]
+        J_PLACE = [180.0, 2.0, -62.0, 0.0, -26.0, 0.0] # Lado contrario (-X)
+        
+        # Puntos de aproximación (Levanta J2 y J3 para no arrastrar la caja)
+        J_APP_PICK = [0.0, -20.0, -40.0, 0.0, -26.0, 0.0]
+        J_APP_PLACE = [180.0, -20.0, -40.0, 0.0, -26.0, 0.0]
+        
         self.pasos_demo = [
-            {"j": [0.0, 30.0, -15.0, 0.0, -105.0, 0.0], "vacio": False}, 
-            {"j": [0.0, 30.0, -15.0, 0.0, -105.0, 0.0], "vacio": True},  
-            {"j": [0.0, 0.0, 0.0, 0.0, -90.0, 0.0], "vacio": True},     
-            {"j": [75.0, 0.0, 0.0, 0.0, -90.0, 0.0], "vacio": True},    
-            {"j": [75.0, 30.0, -15.0, 0.0, -105.0, 0.0], "vacio": True}, 
-            {"j": [75.0, 30.0, -15.0, 0.0, -105.0, 0.0], "vacio": False},
-            {"j": [75.0, 0.0, 0.0, 0.0, -90.0, 0.0], "vacio": False},   
-            {"j": [0.0, 0.0, 0.0, 0.0, -90.0, 0.0], "vacio": False},    
+            {"j": J_APP_PICK,  "vacio": False}, # 1. Acercamiento seguro al Pick
+            {"j": J_PICK,      "vacio": False}, # 2. Bajar a tomar la caja
+            {"j": J_PICK,      "vacio": True},  # 3. Encender succión
+            {"j": J_APP_PICK,  "vacio": True},  # 4. Levantar la caja
+            {"j": J_APP_PLACE, "vacio": True},  # 5. Girar 180° por el aire
+            {"j": J_PLACE,     "vacio": True},  # 6. Bajar al punto de destino
+            {"j": J_PLACE,     "vacio": False}, # 7. Apagar succión (Soltar)
+            {"j": J_APP_PLACE, "vacio": False}, # 8. Retirarse hacia arriba
         ]
         
-        target_j_rad = np.radians(self.pasos_demo[0]["j"])
-        vec = [0.0] * len(self.viewer_3d.chain.links)
-        vec[1:7] = target_j_rad
-        matriz_fk = self.viewer_3d.chain.forward_kinematics(vec)
-        
-        angulo = np.pi / 2
-        rotacion_ajuste = np.array([[np.cos(angulo),0,np.sin(angulo),0],[0,1,0,0],[-np.sin(angulo),0,np.cos(angulo),0],[0,0,0,1]])
-        ajuste_brecha = np.eye(4); ajuste_brecha[2, 3] = -0.045
-        matriz_cuerpo = np.dot(matriz_fk, np.dot(rotacion_ajuste, ajuste_brecha))
-        desplazamiento_tapa = np.eye(4); desplazamiento_tapa[2, 3] = 0.075
-        matriz_ventosa = np.dot(matriz_cuerpo, desplazamiento_tapa)
-        
+        # 2. Spawn exacto de la caja usando tu TCP (en metros)
         self.matriz_caja_inicial = np.eye(4)
-        self.matriz_caja_inicial[0, 3] = matriz_ventosa[0, 3]
-        self.matriz_caja_inicial[1, 3] = matriz_ventosa[1, 3]
-        self.matriz_caja_inicial[2, 3] = 0.15 
+        self.matriz_caja_inicial[0, 3] = 1.33383  # Tu coordenada X exacta
+        self.matriz_caja_inicial[1, 3] = 0.0      # Eje Y centrado
+        self.matriz_caja_inicial[2, 3] = 0.0      # Pegada al piso
         
         self.matriz_caja_mundo = np.copy(self.matriz_caja_inicial)
         if hasattr(self, 'caja_visual'):
             self.caja_visual.setTransform(self.matriz_caja_mundo)
             
-        self.caja_agarrada = False
         self.paso_actual_demo = 0
         self.ejecutar_siguiente_paso_demo()
 
     def detener_demo(self):
         self.modo_operacion = "MANUAL (JOG)"
         self.animacion_movimiento.stop()
-        self.btn_demo.setText("🔁 DEMO PICK & PLACE")
+        self.caja_visual.setVisible(False) # <-- Ocultar caja al salir
+        self.btn_vacio.setChecked(False)
+        self.conmutar_vacio(False)
+        
+        self.btn_demo.setText("DEMO PICK & PLACE")
         self.btn_demo.setStyleSheet("background-color: #17a2b8; color: white; font-weight: bold; padding: 10px; border-radius: 4px;")
-        self.btn_demo.clicked.disconnect()
+        try:
+            self.btn_demo.clicked.disconnect()
+        except: pass
         self.btn_demo.clicked.connect(self.iniciar_demo)
 
     def ejecutar_siguiente_paso_demo(self):
@@ -449,21 +461,24 @@ class PanelControlIndustrial(QWidget):
         distancia = np.linalg.norm(pos_ventosa - pos_caja)
         
         if hasattr(self, 'caja_visual'):
-            if self.vacio_activo and distancia < 0.35: 
-                self.caja_agarrada = True
-                self.payload_kg = 15.5
+            if self.vacio_activo and distancia < 0.40: 
+                if not self.caja_agarrada:
+                    self.caja_agarrada = True
+                    self.payload_kg = 15.5
+                    # Guardamos la relación geométrica exacta en el instante del agarre
+                    self.matriz_relativa_agarre = np.dot(np.linalg.inv(matriz_ventosa), self.matriz_caja_mundo)
             elif not self.vacio_activo:
                 if self.caja_agarrada:
                     self.matriz_caja_mundo = np.copy(self.caja_visual.transform().matrix())
-                    self.matriz_caja_mundo[2, 3] = 0.15 
+                    if self.matriz_caja_mundo[2, 3] < 0.0: # Evitar que caiga bajo el suelo al soltar
+                        self.matriz_caja_mundo[2, 3] = 0.0 
                     self.caja_visual.setTransform(self.matriz_caja_mundo)
                 self.caja_agarrada = False
                 self.payload_kg = 0.0
 
             if self.caja_agarrada:
-                desplazamiento_agarre = np.eye(4)
-                desplazamiento_agarre[2, 3] = 0.15 
-                matriz_caja_final = np.dot(matriz_ventosa, desplazamiento_agarre)
+                # La caja se mueve usando la matriz relativa, por lo que hereda todo (incluso si la atrapaste chueca)
+                matriz_caja_final = np.dot(matriz_ventosa, self.matriz_relativa_agarre)
                 self.caja_visual.setTransform(matriz_caja_final)
             else:
                 self.caja_visual.setTransform(self.matriz_caja_mundo)
@@ -609,6 +624,24 @@ class DialogoInfoSistema(QDialog):
         form_cine.addRow("Z:", self.lbl_z)
         col_izq.addWidget(grupo_cine)
         
+        # === NUEVO: GRUPO DE ARTICULACIONES (J1-J6) ===
+        grupo_joints = QGroupBox("Articulaciones (Grados)")
+        form_joints = QFormLayout(grupo_joints)
+        self.lbl_j1 = QLabel("-"); self.lbl_j1.setObjectName("valor")
+        self.lbl_j2 = QLabel("-"); self.lbl_j2.setObjectName("valor")
+        self.lbl_j3 = QLabel("-"); self.lbl_j3.setObjectName("valor")
+        self.lbl_j4 = QLabel("-"); self.lbl_j4.setObjectName("valor")
+        self.lbl_j5 = QLabel("-"); self.lbl_j5.setObjectName("valor")
+        self.lbl_j6 = QLabel("-"); self.lbl_j6.setObjectName("valor")
+        form_joints.addRow("J1:", self.lbl_j1)
+        form_joints.addRow("J2:", self.lbl_j2)
+        form_joints.addRow("J3:", self.lbl_j3)
+        form_joints.addRow("J4:", self.lbl_j4)
+        form_joints.addRow("J5:", self.lbl_j5)
+        form_joints.addRow("J6:", self.lbl_j6)
+        col_izq.addWidget(grupo_joints)
+        # ==============================================
+        
         col_izq.addStretch()
         layout_principal.addWidget(contenedor_izq)
 
@@ -624,7 +657,7 @@ class DialogoInfoSistema(QDialog):
         pg.setConfigOption('background', '#1e1e1e')
         pg.setConfigOption('foreground', '#d4d4d4')
 
-        self.plot_temp = pg.PlotWidget(title="Telemetría: Temperatura de Motores (°C)")
+        self.plot_temp = pg.PlotWidget(title="Temperatura de Motores (°C)")
         self.plot_temp.showGrid(x=True, y=True, alpha=0.3)
         self.plot_temp.addLegend(offset=(10, 10))
         self.curvas_temp = []
@@ -633,7 +666,7 @@ class DialogoInfoSistema(QDialog):
             self.curvas_temp.append(curva)
         col_der.addWidget(self.plot_temp)
 
-        self.plot_curr = pg.PlotWidget(title="Telemetría: Consumo Eléctrico (A)")
+        self.plot_curr = pg.PlotWidget(title="Consumo Eléctrico (A)")
         self.plot_curr.showGrid(x=True, y=True, alpha=0.3)
         self.plot_curr.addLegend(offset=(10, 10))
         self.curvas_curr = []
@@ -661,6 +694,15 @@ class DialogoInfoSistema(QDialog):
         self.lbl_x.setText(f"{datos['x']:.2f}")
         self.lbl_y.setText(f"{datos['y']:.2f}")
         self.lbl_z.setText(f"{datos['z']:.2f}")
+        
+        # === PEGAR ESTO JUSTO DEBAJO ===
+        self.lbl_j1.setText(f"{datos['j1']:.2f}°")
+        self.lbl_j2.setText(f"{datos['j2']:.2f}°")
+        self.lbl_j3.setText(f"{datos['j3']:.2f}°")
+        self.lbl_j4.setText(f"{datos['j4']:.2f}°")
+        self.lbl_j5.setText(f"{datos['j5']:.2f}°")
+        self.lbl_j6.setText(f"{datos['j6']:.2f}°")
+        # ================================
 
         self.lbl_deadman.style().unpolish(self.lbl_deadman)
         self.lbl_deadman.style().polish(self.lbl_deadman)
