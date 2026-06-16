@@ -5,7 +5,7 @@ import time
 from collections import deque
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                                QGridLayout, QPushButton, QGroupBox, QTextEdit, 
-                               QListWidget, QApplication, QDialog, QFormLayout, QLabel)
+                               QListWidget, QApplication, QDialog, QFormLayout, QLabel, QScrollArea)
 from PySide6.QtCore import Qt, QVariantAnimation, QEasingCurve, QTimer
 from PySide6.QtGui import QTextCursor, QTextFormat, QColor
 import pyqtgraph as pg
@@ -87,8 +87,25 @@ class PanelControlIndustrial(QWidget):
         self.timer_dashboard.start(100) # SCADA a 10Hz
         
         self.setFixedWidth(380)
-        layout_principal = QVBoxLayout(self)
+        
+        # --- IMPLEMENTACIÓN DE SCROLL AREA ---
+        layout_maestro = QVBoxLayout(self)
+        layout_maestro.setContentsMargins(0, 0, 0, 0)
+
+        area_scroll = QScrollArea()
+        area_scroll.setWidgetResizable(True)
+        area_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        area_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        area_scroll.setStyleSheet("QScrollArea { border: none; background-color: transparent; }")
+
+        contenedor_controles = QWidget()
+        layout_principal = QVBoxLayout(contenedor_controles)
         layout_principal.setContentsMargins(10, 10, 10, 10)
+        layout_principal.setSpacing(15)
+
+        area_scroll.setWidget(contenedor_controles)
+        layout_maestro.addWidget(area_scroll)
+        # -------------------------------------
         
         self.current_angles_deg = [0.0] * 6 
         self.deadman_activo = False
@@ -99,42 +116,36 @@ class PanelControlIndustrial(QWidget):
             QPushButton:pressed { background-color: #28a745; }
         """
 
-        # 1. LISTA DE PUNTOS GUARDADOS
-        grupo_lista = QGroupBox("Posiciones Guardadas (Cartesianas)")
-        layout_lista = QVBoxLayout(grupo_lista)
-        self.lista_puntos = QListWidget()
-        self.lista_puntos.setStyleSheet("background-color: #282c34; color: #98c379; font-family: Consolas, monospace; font-size: 13px;")
-        self.lista_puntos.setMaximumHeight(100)
-        layout_lista.addWidget(self.lista_puntos)
-        layout_principal.addWidget(grupo_lista, stretch=0)
-
-        # 2. PANTALLA DEL iPendant (Editor de Código TP)
+        # 1. PROGRAMA TP (Editor)
         grupo_editor = QGroupBox("Programa TP (Editor)")
         layout_editor = QVBoxLayout(grupo_editor)
         self.editor_codigo = QTextEdit()
         self.editor_codigo.setStyleSheet("background-color: white; color: black; font-family: Consolas; font-size: 14px;")
+        self.editor_codigo.setMinimumHeight(150)
         self.editor_codigo.setText("J P[1] 100% FINE\nJ P[2] 100% FINE")
         layout_editor.addWidget(self.editor_codigo)
         
-        self.btn_ejecutar = QPushButton("▶ EJECUTAR PROGRAMA (F3)")
+        self.btn_ejecutar = QPushButton("EJECUTAR PROGRAMA (F3)")
         self.btn_ejecutar.setStyleSheet("background-color: #28a745; color: white; font-weight: bold; padding: 10px; border-radius: 4px;")
         self.btn_ejecutar.clicked.connect(self.iniciar_secuencia_programa)
         layout_editor.addWidget(self.btn_ejecutar)
         
-        self.btn_demo = QPushButton("DEMO PICK & PLACE")
-        self.btn_demo.setStyleSheet("background-color: #17a2b8; color: white; font-weight: bold; padding: 10px; border-radius: 4px;")
-        self.btn_demo.clicked.connect(self.iniciar_demo)
-        layout_editor.addWidget(self.btn_demo)
-        
-        layout_principal.addWidget(grupo_editor, stretch=2)
+        layout_principal.addWidget(grupo_editor, stretch=0)
 
-        # 3. ZONA DE JOGGING Y BOTÓN HOME
+        # 2. CONTROL MANUAL (Jog y Guardado)
         grupo_jog = QGroupBox("Control Manual (Jog)")
         layout_jog = QGridLayout(grupo_jog)
+        # Sustituye el bloque del btn_home por este:
         self.btn_home = QPushButton("HOME")
         self.btn_home.setStyleSheet("background-color: #007bff; color: white; font-weight: bold; padding: 8px; border-radius: 4px;")
         self.btn_home.clicked.connect(self.ir_a_home)
-        layout_jog.addWidget(self.btn_home, 0, 0, 1, 2)
+        layout_jog.addWidget(self.btn_home, 0, 0) # Columna 0
+        
+        self.btn_reset = QPushButton("RESET FAULT")
+        self.btn_reset.setStyleSheet("background-color: #dc3545; color: white; font-weight: bold; padding: 8px; border-radius: 4px;")
+        self.btn_reset.clicked.connect(self.resetear_falla)
+        layout_jog.addWidget(self.btn_reset, 0, 1) # Columna 1
+        
         etiquetas_botones = [("-J1", "+J1"), ("-J2", "+J2"), ("-J3", "+J3"), ("-J4", "+J4"), ("-J5", "+J5"), ("-J6", "+J6")]
         for fila, (texto_neg, texto_pos) in enumerate(etiquetas_botones):
             btn_neg = QPushButton(texto_neg)
@@ -149,31 +160,67 @@ class PanelControlIndustrial(QWidget):
             btn_pos.clicked.connect(partial(self.procesar_jog_click, joint_id, 1))
             layout_jog.addWidget(btn_neg, fila + 1, 0)
             layout_jog.addWidget(btn_pos, fila + 1, 1)
+
+        # Botón de Grabar Posición integrado al final del Jog
+        self.btn_grabar_punto = QPushButton(f"Grabar posición P[{self.siguiente_id_punto}]")
+        self.btn_grabar_punto.setStyleSheet("background-color: #ffc107; color: black; font-weight: bold; padding: 8px; border-radius: 4px; margin-top: 10px;")
+        self.btn_grabar_punto.clicked.connect(self.grabar_punto_actual)
+        layout_jog.addWidget(self.btn_grabar_punto, 7, 0, 1, 2) 
+        
         layout_principal.addWidget(grupo_jog, stretch=0)
 
-        # 4. ZONA DE MEMORIA Y COMPILADOR
-        grupo_memoria = QGroupBox("Memoria de Puntos (Teach)")
-        layout_memoria = QVBoxLayout(grupo_memoria)
-        self.btn_grabar_punto = QPushButton(f"Grabar posición P[{self.siguiente_id_punto}]")
-        self.btn_grabar_punto.setStyleSheet("background-color: #ffc107; color: black; font-weight: bold; padding: 8px; border-radius: 4px;")
-        self.btn_grabar_punto.clicked.connect(self.grabar_punto_actual)
-        layout_memoria.addWidget(self.btn_grabar_punto)
-        layout_principal.addWidget(grupo_memoria, stretch=0)
-
-        # 5. CONTROL DEL EFECTOR FINAL (Ventosa)
-        grupo_ee = QGroupBox("Actuador Final (Herramienta)")
-        layout_ee = QVBoxLayout(grupo_ee)
-        self.btn_vacio = QPushButton("ACTIVAR VACÍO (VENTOSA)")
-        self.btn_vacio.setStyleSheet("""
-            QPushButton { background-color: #4a4a4a; color: white; font-weight: bold; padding: 10px; border-radius: 4px; }
-            QPushButton:checked { background-color: #218838; border: 2px solid #1a6329; }
-        """)
-        self.btn_vacio.setCheckable(True)
-        self.btn_vacio.clicked.connect(self.conmutar_vacio)
-        layout_ee.addWidget(self.btn_vacio)
-        layout_principal.addWidget(grupo_ee, stretch=0)
+        # 3. MACROS DEL SISTEMA
+        grupo_macros = QGroupBox("Rutinas Predefinidas (Macros)")
+        layout_macros = QVBoxLayout(grupo_macros)
         
-        self.actualizar_cinematica_local()
+        self.btn_demo = QPushButton("DEMO PICK && PLACE")
+        self.btn_demo.setStyleSheet("background-color: #17a2b8; color: white; font-weight: bold; padding: 10px; border-radius: 4px;")
+        self.btn_demo.clicked.connect(self.iniciar_demo)
+        layout_macros.addWidget(self.btn_demo)
+        
+        layout_principal.addWidget(grupo_macros, stretch=0)
+
+        # 4. ENTRADAS Y SALIDAS DIGITALES (I/O)
+        grupo_io = QGroupBox("Digital I/O")
+        layout_io = QGridLayout(grupo_io)
+        
+        lbl_di = QLabel("DI (Entradas)"); lbl_di.setStyleSheet("color: #abb2bf; font-weight: bold;")
+        lbl_do = QLabel("DO (Salidas)");  lbl_do.setStyleSheet("color: #abb2bf; font-weight: bold;")
+        layout_io.addWidget(lbl_di, 0, 0, alignment=Qt.AlignCenter)
+        layout_io.addWidget(lbl_do, 0, 1, alignment=Qt.AlignCenter)
+        
+        self.leds_di = []
+        self.btns_do = []
+        
+        for i in range(8):
+            led = QLabel(f"DI[{i+1}]")
+            led.setStyleSheet("background-color: #333333; color: #7f848e; padding: 4px; border-radius: 4px;")
+            led.setAlignment(Qt.AlignCenter)
+            self.leds_di.append(led)
+            layout_io.addWidget(led, i+1, 0)
+            
+            btn = QPushButton(f"DO[{i+1}]")
+            btn.setStyleSheet("""
+                QPushButton { background-color: #4a4a4a; color: white; padding: 4px; border-radius: 4px; }
+                QPushButton:checked { background-color: #28a745; font-weight: bold; }
+            """)
+            btn.setCheckable(True)
+            self.btns_do.append(btn)
+            layout_io.addWidget(btn, i+1, 1)
+
+        self.btns_do[0].setText("DO[1]: VACUUM")
+        self.btns_do[0].clicked.connect(self.conmutar_vacio)
+        self.btn_vacio = self.btns_do[0] 
+        
+        layout_principal.addWidget(grupo_io, stretch=0)
+
+        # Mapeo específico de la DO[1] para el efector final (Ventosa)
+        self.btns_do[0].setText("DO[1]: VACUUM")
+        self.btns_do[0].clicked.connect(self.conmutar_vacio)
+        # Mantenemos la referencia interna para no romper funciones de automatización
+        self.btn_vacio = self.btns_do[0] 
+        
+        layout_principal.addWidget(grupo_io, stretch=0)
     
         # ==========================================
         # MOTOR DE INTERPOLACIÓN DE TRAYECTORIAS
@@ -239,30 +286,59 @@ class PanelControlIndustrial(QWidget):
         return True
 
     def procesar_jog_click(self, joint_index, paso_grados):
-        if not self.deadman_activo: return
-        
-        # --- BLOQUEO ESTRICTO DE HARDWARE ---
-        # Si el robot entró en pánico, ignoramos los clics aunque dejes el botón presionado
-        if self.paro_emergencia_activo: return
-        
+        if self.paro_emergencia_activo:
+            self.viewer_3d.mostrar_alerta("FALLA DE SISTEMA: PRESIONE RESET FAULT")
+            return
+            
+        if not self.deadman_activo:
+            self.viewer_3d.mostrar_alerta("ADVERTENCIA: PRESIONE DEADMAN (SHIFT) PARA MOVER")
+            return
+
         self.modo_operacion = "MANUAL (JOG)"
-        
         angulos_tentativos = list(self.current_angles_deg)
         angulos_tentativos[joint_index] += paso_grados
         
+        # Validación de Soft Limits
         if self.verificar_limites_seguros(angulos_tentativos):
-            # Es seguro: Movemos el robot
             self.current_angles_deg[joint_index] = angulos_tentativos[joint_index]
             self.actualizar_cinematica_local()
+            
+            # Si estábamos atascados en un límite y logramos movernos, borramos la advertencia
+            if self.viewer_3d.alarma_activa and "LÍMITE" in self.viewer_3d.lbl_estado.text():
+                self.viewer_3d.ocultar_alerta()
         else:
-            # PELIGRO: Congelamos el mando virtual por 1 segundo y disparamos SCADA
-            self.paro_emergencia_activo = True
-            QTimer.singleShot(1000, lambda: setattr(self, 'paro_emergencia_activo', False))
+            self.viewer_3d.mostrar_alerta("ADVERTENCIA: LÍMITE DE MOVIMIENTO ALCANZADO")
+
+    def activar_paro_emergencia(self):
+        if self.paro_emergencia_activo: return
+        self.paro_emergencia_activo = True
+        self.animacion_movimiento.stop()
+        
+        # Abortar limpiezamente ciclos automáticos en curso
+        if self.modo_operacion == "AUTOMÁTICO (DEMO)":
+            if hasattr(self, 'caja_visual'): self.caja_visual.setVisible(False)
+            self.btn_vacio.setChecked(False)
+            self.conmutar_vacio(False)
+            
+        self.modo_operacion = "FALLA (E-STOP)"
+        self.viewer_3d.mostrar_alerta("PARO DE EMERGENCIA ACTIVADO")
+        print("[CRÍTICO] Paro de emergencia activado. El sistema requiere reset manual.")
+
+    def resetear_falla(self):
+        if self.paro_emergencia_activo:
+            self.paro_emergencia_activo = False
+            self.modo_operacion = "MANUAL (JOG)"
+            self.viewer_3d.ocultar_alerta()
+            print("[SISTEMA] Fallas restablecidas. Sistema en línea.")
 
     def _ejecutar_paso_interpolacion(self, t):
-        if not self.deadman_activo:
+        if self.paro_emergencia_activo:
             self.animacion_movimiento.stop()
-            self.modo_operacion = "MANUAL (JOG)"
+            return
+            
+        # El deadman solo es estricto si estamos en modo manual (jogging de puntos intermedios)
+        if self.modo_operacion == "MANUAL (JOG)" and not self.deadman_activo:
+            self.animacion_movimiento.stop()
             return
             
         angulos_paso = [0.0] * 6
@@ -274,21 +350,19 @@ class PanelControlIndustrial(QWidget):
             self.current_angles_deg = angulos_paso
             self.actualizar_cinematica_local()
         else:
-            # Abortamos trayectoria y mandamos a Emergencia
             self.animacion_movimiento.stop()
-            self.detener_demo()
-            print("[CRITICAL STOP] Trayectoria automática abortada por violación de límites.")
+            if self.modo_operacion == "AUTOMÁTICO (DEMO)": self.detener_demo()
             self.paro_emergencia_activo = True
-            QTimer.singleShot(1500, lambda: setattr(self, 'paro_emergencia_activo', False))
+            self.modo_operacion = "FALLA (E-STOP)"
+            # Se requiere presionar la barra espaciadora para liberar la falla
 
     # ==========================================
     # LÓGICA DE LA DEMO PICK & PLACE
     # ==========================================
     def iniciar_demo(self):
-        if not self.deadman_activo: 
-            self.actualizar_estado_deadman(True) 
-            
+        if self.paro_emergencia_activo: return # <-- Ya no pedimos deadman_activo            
         self.modo_operacion = "AUTOMÁTICO (DEMO)"
+        self.viewer_3d.set_texto_estado_base("EJECUTANDO DEMO...")
         self.btn_demo.setText("DETENER DEMO")
         self.btn_demo.setStyleSheet("background-color: #dc3545; color: white; font-weight: bold; padding: 10px; border-radius: 4px;")
         self.btn_demo.clicked.disconnect()
@@ -339,12 +413,13 @@ class PanelControlIndustrial(QWidget):
 
     def detener_demo(self):
         self.modo_operacion = "MANUAL (JOG)"
+        self.viewer_3d.set_texto_estado_base("ROBOT EN ESPERA")
         self.animacion_movimiento.stop()
         self.caja_visual.setVisible(False) # <-- Ocultar caja al salir
         self.btn_vacio.setChecked(False)
         self.conmutar_vacio(False)
         
-        self.btn_demo.setText("DEMO PICK & PLACE")
+        self.btn_demo.setText("DEMO PICK && PLACE")
         self.btn_demo.setStyleSheet("background-color: #17a2b8; color: white; font-weight: bold; padding: 10px; border-radius: 4px;")
         try:
             self.btn_demo.clicked.disconnect()
@@ -412,6 +487,10 @@ class PanelControlIndustrial(QWidget):
     def actualizar_estado_deadman(self, presionado):
         self.deadman_activo = presionado
         self.viewer_3d.set_deadman_state(presionado)
+        
+        # Si se presiona el deadman y no hay falla crítica, limpiamos las advertencias visuales
+        if presionado and not self.paro_emergencia_activo:
+            self.viewer_3d.ocultar_alerta()
 
     def resaltar_linea_tp(self, numero_linea):
         cursor = self.editor_codigo.textCursor()
@@ -517,8 +596,9 @@ class PanelControlIndustrial(QWidget):
         fk_matrix = self.viewer_3d.chain.forward_kinematics([0.0] + list(np.radians(self.current_angles_deg)) + [0.0]*2)
         x, y, z = fk_matrix[:3, 3] * 1000 
         
-        self.lista_puntos.addItem(f"P[{self.siguiente_id_punto}]: X={x:6.1f}  Y={y:6.1f}  Z={z:6.1f}")
-        self.lista_puntos.scrollToBottom()
+        # Actualiza estas dos líneas en grabar_punto_actual:
+        self.viewer_3d.lista_puntos.addItem(f"P[{self.siguiente_id_punto}]: X={x:6.1f}  Y={y:6.1f}  Z={z:6.1f}")
+        self.viewer_3d.lista_puntos.scrollToBottom()
         
         self.siguiente_id_punto += 1
         self.btn_grabar_punto.setText(f"Grabar posición P[{self.siguiente_id_punto}]")
@@ -526,8 +606,9 @@ class PanelControlIndustrial(QWidget):
         QTimer.singleShot(500, lambda: self.btn_grabar_punto.setStyleSheet("background-color: #ffc107; color: black; font-weight: bold; padding: 8px; border-radius: 4px;"))
 
     def iniciar_secuencia_programa(self):
-        if not self.deadman_activo or self.paro_emergencia_activo: return
+        if self.paro_emergencia_activo: return
         self.modo_operacion = "AUTOMÁTICO (TP RUN)"
+        self.viewer_3d.set_texto_estado_base("EJECUTANDO PROGRAMA TP...")
         texto = self.editor_codigo.toPlainText()
         self.lineas_programa = [linea.strip() for linea in texto.split('\n') if linea.strip()]
         self.linea_actual_idx = 0
@@ -536,8 +617,8 @@ class PanelControlIndustrial(QWidget):
         self._procesar_siguiente_linea()
 
     def _procesar_siguiente_linea(self):
-        if not self.deadman_activo or self.paro_emergencia_activo: 
-            self.modo_operacion = "MANUAL (JOG)"
+        if self.paro_emergencia_activo: 
+            self.modo_operacion = "FALLA (E-STOP)"
             return
         
         if self.linea_actual_idx >= len(self.lineas_programa):
@@ -545,26 +626,45 @@ class PanelControlIndustrial(QWidget):
             self.ciclos_completados += 1
             self.ultimo_tiempo_ciclo_seg = round(time.time() - self.tiempo_inicio_ciclo, 2)
             self.modo_operacion = "MANUAL (JOG)"
+            self.viewer_3d.set_texto_estado_base("ROBOT EN ESPERA")
             return
             
         self.resaltar_linea_tp(self.linea_actual_idx)
-        linea_actual = self.lineas_programa[self.linea_actual_idx].upper()
+        linea_texto = self.lineas_programa[self.linea_actual_idx]
         self.linea_actual_idx += 1
         
-        if "P[" in linea_actual:
-            inicio = linea_actual.find("P[")
-            fin = linea_actual.find("]", inicio) + 1
-            nombre_punto = linea_actual[inicio:fin]
-            angulos_destino = self.compilador.obtener_punto(nombre_punto)
-            if angulos_destino:
-                self.angulos_inicio = list(self.current_angles_deg)
-                self.angulos_destino = angulos_destino
-                self.animacion_movimiento.setStartValue(0.0)
-                self.animacion_movimiento.setEndValue(1.0)
-                self.animacion_movimiento.start()
-            else:
-                self._procesar_siguiente_linea()
+        # Delegamos el análisis lógico al compilador
+        instruccion = self.compilador.compilar_linea(linea_texto)
+        comando = instruccion.get("comando")
+        
+        if comando == "MOVE":
+            self.angulos_inicio = list(self.current_angles_deg)
+            self.angulos_destino = instruccion["angulos"]
+            self.animacion_movimiento.setDuration(instruccion["duracion_ms"])
+            self.animacion_movimiento.setStartValue(0.0)
+            self.animacion_movimiento.setEndValue(1.0)
+            self.animacion_movimiento.start()
+            
+        elif comando == "DO":
+            estado_logico = instruccion["estado"]
+            # Enrutamiento específico para DO[1] hacia el actuador de vacío
+            if instruccion.get("puerto") == 1:
+                self.btn_vacio.setChecked(estado_logico)
+                self.conmutar_vacio(estado_logico)
+            
+            # Ejecución secuencial inmediata para comandos lógicos
+            self._procesar_siguiente_linea()
+            
+        elif comando == "WAIT":
+            tiempo_retardo = instruccion["tiempo_ms"]
+            QTimer.singleShot(tiempo_retardo, self._procesar_siguiente_linea)
+            
+        elif comando == "ERROR":
+            print(f"[Sistema Operativo TP] Detalle: {instruccion['mensaje']}")
+            self._procesar_siguiente_linea()
+            
         else:
+            # Comandos vacíos (EMPTY) o desconocidos (UNKNOWN) se omiten silenciosamente
             self._procesar_siguiente_linea()
 
 # ==========================================
@@ -648,9 +748,10 @@ class DialogoInfoSistema(QDialog):
         col_der = QVBoxLayout()
         
         self.max_historia = 150
-        self.hist_tiempo = deque(maxlen=self.max_historia)
-        self.hist_temp = [deque(maxlen=self.max_historia) for _ in range(6)]
-        self.hist_curr = [deque(maxlen=self.max_historia) for _ in range(6)]
+        # Variables de telemetría (Histórico completo de la sesión)
+        self.hist_tiempo = []
+        self.hist_temp = [[] for _ in range(6)]
+        self.hist_curr = [[] for _ in range(6)]
         self.tiempo_x = 0.0
 
         self.colores = [(255,100,100), (100,255,100), (100,100,255), (255,255,100), (255,100,255), (100,255,255)]
@@ -660,6 +761,7 @@ class DialogoInfoSistema(QDialog):
         self.plot_temp = pg.PlotWidget(title="Temperatura de Motores (°C)")
         self.plot_temp.showGrid(x=True, y=True, alpha=0.3)
         self.plot_temp.addLegend(offset=(10, 10))
+        self.plot_temp.setLimits(xMin=0)
         self.curvas_temp = []
         for i in range(6):
             curva = self.plot_temp.plot(pen=pg.mkPen(color=self.colores[i], width=2), name=f"J{i+1}")
@@ -669,6 +771,7 @@ class DialogoInfoSistema(QDialog):
         self.plot_curr = pg.PlotWidget(title="Consumo Eléctrico (A)")
         self.plot_curr.showGrid(x=True, y=True, alpha=0.3)
         self.plot_curr.addLegend(offset=(10, 10))
+        self.plot_temp.setLimits(xMin=0)
         self.curvas_curr = []
         for i in range(6):
             curva = self.plot_curr.plot(pen=pg.mkPen(color=self.colores[i], width=2), name=f"J{i+1}")
@@ -742,6 +845,8 @@ class MainWindow(QMainWindow):
         if event.type() == QEvent.KeyPress:
             if event.key() == Qt.Key_Shift and not event.isAutoRepeat():
                 self.panel_control.actualizar_estado_deadman(True)
+            elif event.key() == Qt.Key_Space and not event.isAutoRepeat():
+                self.panel_control.activar_paro_emergencia() # <-- Activación unidireccional
         elif event.type() == QEvent.KeyRelease:
             if event.key() == Qt.Key_Shift and not event.isAutoRepeat():
                 self.panel_control.actualizar_estado_deadman(False)

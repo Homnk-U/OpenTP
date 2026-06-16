@@ -1,8 +1,8 @@
 import os
 import numpy as np
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QPushButton, 
-                               QLabel, QGroupBox, QGridLayout)
-from PySide6.QtCore import Qt, QSize
+                               QLabel, QGroupBox, QGridLayout, QHBoxLayout)
+from PySide6.QtCore import Qt, QSize, QTimer
 from PySide6.QtGui import QVector3D, QFont, QIcon
 import pyqtgraph.opengl as gl
 import ikpy.chain
@@ -13,19 +13,15 @@ class RobotViewer3D(QWidget):
         super().__init__(parent)
         
         # ==========================================
-        # 🛠️ CALIBRACIÓN DEL STL DE LA VENTOSA
+        # CALIBRACIÓN DEL STL DE LA VENTOSA
         # ==========================================
-        # Si la ventosa sigue enterrada en J6, aumenta el offset_x (ej. 0.20)
-        # Si quedó flotando muy lejos, redúcelo (ej. 0.10)
-        self.ventosa_offset_x = 0.06  # Desplaza la ventosa hacia la punta (en metros)
+        self.ventosa_offset_x = 0.06  
         self.ventosa_offset_y = 0.0
         self.ventosa_offset_z = 0.0
         
-        # Gira la ventosa si está de cabeza o de lado (en grados)
         self.ventosa_rot_x = 180
         self.ventosa_rot_y = 90
         self.ventosa_rot_z = 0
-        
         # ==========================================
         
         layout_principal = QGridLayout(self)
@@ -35,14 +31,41 @@ class RobotViewer3D(QWidget):
         self.canvas.setBackgroundColor((40, 44, 52))
         layout_principal.addWidget(self.canvas, 0, 0)
 
-        self.lbl_deadman = QLabel("DEADMAN SWITCH: RELEASED")
-        self.lbl_deadman.setStyleSheet("""
-            background-color: #dc3545; color: white; font-weight: bold; 
-            padding: 8px 15px; border-radius: 4px; font-family: Arial; font-size: 14px;
-            margin-top: 15px; margin-left: 15px;
-        """)
-        layout_principal.addWidget(self.lbl_deadman, 0, 0, Qt.AlignTop | Qt.AlignLeft)
+        # ==========================================
+        # BARRA DE ESTADO INDUSTRIAL Y DEADMAN
+        # ==========================================
+        contenedor_estado = QWidget()
+        contenedor_estado.setAttribute(Qt.WA_TransparentForMouseEvents) 
+        layout_estado = QVBoxLayout(contenedor_estado)
+        layout_estado.setContentsMargins(15, 15, 0, 0)
+        layout_estado.setSpacing(10)
 
+        self.lbl_estado = QLabel("Standby")
+        self.lbl_estado.setAlignment(Qt.AlignCenter)
+        self.lbl_estado.setFixedWidth(450) # Ancho fijo para evitar inestabilidad
+
+        self.lbl_deadman = QLabel("DEADMAN SWITCH: RELEASED")
+        self.lbl_deadman.setAlignment(Qt.AlignCenter)
+        self.lbl_deadman.setFixedWidth(450)
+
+        layout_estado.addWidget(self.lbl_estado)
+        layout_estado.addWidget(self.lbl_deadman)
+        
+        layout_principal.addWidget(contenedor_estado, 0, 0, Qt.AlignTop | Qt.AlignLeft)
+        
+        self.timer_alarma = QTimer(self)
+        self.timer_alarma.timeout.connect(self._animar_alarma)
+        self.alarma_activa = False
+        self.fase_alarma = False
+        self.nivel_alarma = "OK"
+
+        # Inicializar estilos visuales base
+        self.ocultar_alerta()
+        self.set_deadman_state(False)
+
+        # ==========================================
+        # PANELES DE TELEMETRÍA TCP Y PUNTOS
+        # ==========================================
         self.group_tcp = QGroupBox("Posición Cartesiana (TCP)")
         self.group_tcp.setStyleSheet("""
             QGroupBox { 
@@ -55,6 +78,7 @@ class RobotViewer3D(QWidget):
                 color: #abb2bf; font-weight: bold; font-size: 14px; 
             }
         """)
+        self.group_tcp.setMaximumHeight(150)
         
         layout_tcp = QGridLayout(self.group_tcp)
         layout_tcp.setSpacing(8)
@@ -82,8 +106,40 @@ class RobotViewer3D(QWidget):
         self.lbl_tcp_y = crear_fila_tcp(1, "Y")
         self.lbl_tcp_z = crear_fila_tcp(2, "Z")
 
-        layout_principal.addWidget(self.group_tcp, 0, 0, Qt.AlignTop | Qt.AlignRight)
+        contenedor_overlay = QWidget()
+        layout_overlay = QHBoxLayout(contenedor_overlay)
+        layout_overlay.setContentsMargins(0, 0, 15, 0)
+        
+        layout_overlay.addWidget(self.group_tcp)
+        
+        self.group_puntos = QGroupBox("Posiciones Guardadas")
+        self.group_puntos.setStyleSheet("""
+            QGroupBox { 
+                border: 1px solid #5c6370; border-radius: 6px; 
+                background-color: rgba(30, 30, 30, 220); 
+                margin-top: 15px; padding-top: 15px;
+            }
+            QGroupBox::title { 
+                subcontrol-origin: margin; left: 10px; padding: 0 5px; 
+                color: #abb2bf; font-weight: bold; font-size: 14px; 
+            }
+        """)
+        self.group_puntos.setMaximumHeight(150)
+        layout_puntos = QVBoxLayout(self.group_puntos)
+        layout_puntos.setContentsMargins(10, 15, 10, 10)
+        
+        from PySide6.QtWidgets import QListWidget
+        self.lista_puntos = QListWidget()
+        self.lista_puntos.setStyleSheet("background-color: transparent; color: #98c379; font-family: Consolas; font-size: 13px; border: none;")
+        self.lista_puntos.setFixedWidth(200)
+        layout_puntos.addWidget(self.lista_puntos)
+        
+        layout_overlay.addWidget(self.group_puntos)
+        layout_principal.addWidget(contenedor_overlay, 0, 0, Qt.AlignTop | Qt.AlignRight)
 
+        # ==========================================
+        # BARRA DE HERRAMIENTAS DE CÁMARA
+        # ==========================================
         self.toolbar_vista = QWidget()
         self.toolbar_vista.setFixedWidth(55)
         self.toolbar_vista.setStyleSheet("background-color: rgba(44, 49, 58, 200); border-radius: 6px; margin-right: 15px;")
@@ -116,6 +172,9 @@ class RobotViewer3D(QWidget):
         
         layout_principal.addWidget(self.toolbar_vista, 0, 0, Qt.AlignVCenter | Qt.AlignRight)
 
+        # ==========================================
+        # ENTORNO 3D Y CINEMÁTICA
+        # ==========================================
         grid = gl.GLGridItem()
         grid.setSize(x=10, y=10, z=10)
         grid.setSpacing(x=0.5, y=0.5, z=0.5)
@@ -142,14 +201,25 @@ class RobotViewer3D(QWidget):
             self.actualizar_posicion_visual([0.0] * len(self.chain.links))
             self.view_home()
 
+    # ==========================================
+    # MÉTODOS DE LA INTERFAZ
+    # ==========================================
     def set_deadman_state(self, presionado):
         if presionado:
             self.lbl_deadman.setText("DEADMAN SWITCH: READY")
-            self.lbl_deadman.setStyleSheet("background-color: #28a745; color: white; font-weight: bold; padding: 8px 15px; border-radius: 4px; font-family: Arial; font-size: 14px; margin-top: 15px; margin-left: 15px;")
+            self.lbl_deadman.setStyleSheet("""
+                background-color: #28a745; color: white; font-weight: bold; 
+                padding: 10px; border-radius: 4px; font-family: Consolas; font-size: 14px;
+                border: 1px solid #1e7e34;
+            """)
         else:
             self.lbl_deadman.setText("DEADMAN SWITCH: RELEASED")
-            self.lbl_deadman.setStyleSheet("background-color: #dc3545; color: white; font-weight: bold; padding: 8px 15px; border-radius: 4px; font-family: Arial; font-size: 14px; margin-top: 15px; margin-left: 15px;")
-
+            self.lbl_deadman.setStyleSheet("""
+                background-color: #dc3545; color: white; font-weight: bold; 
+                padding: 10px; border-radius: 4px; font-family: Consolas; font-size: 14px;
+                border: 1px solid #c82333;
+            """)        
+    
     def actualizar_tcp_ui(self, x, y, z):
         self.lbl_tcp_x.setText(f"{x:.2f}")
         self.lbl_tcp_y.setText(f"{y:.2f}")
@@ -188,7 +258,6 @@ class RobotViewer3D(QWidget):
                         except Exception as e:
                             print(f"Error cargando {link.name}: {e}")
                             
-            # === CARGA PURA DEL STL DE LA VENTOSA ===
             try:
                 ventosa_path = os.path.join(base_path, "ventosa.stl")
                 if os.path.exists(ventosa_path):
@@ -218,7 +287,6 @@ class RobotViewer3D(QWidget):
         if hasattr(self, 'item_ventosa'):
             matriz_brida = transformaciones[-3] 
             
-            # 1. Aplicamos las rotaciones de calibración
             rot_x = np.radians(self.ventosa_rot_x)
             rot_y = np.radians(self.ventosa_rot_y)
             rot_z = np.radians(self.ventosa_rot_z)
@@ -227,13 +295,11 @@ class RobotViewer3D(QWidget):
             Ry = np.array([[np.cos(rot_y), 0, np.sin(rot_y), 0], [0, 1, 0, 0], [-np.sin(rot_y), 0, np.cos(rot_y), 0], [0, 0, 0, 1]])
             Rz = np.array([[np.cos(rot_z), -np.sin(rot_z), 0, 0], [np.sin(rot_z), np.cos(rot_z), 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
             
-            # 2. Aplicamos las traslaciones (Offsets)
             T = np.eye(4)
             T[0, 3] = self.ventosa_offset_x
             T[1, 3] = self.ventosa_offset_y
             T[2, 3] = self.ventosa_offset_z
             
-            # Combinamos la matriz
             matriz_ajuste_local = np.dot(T, np.dot(Rz, np.dot(Ry, Rx)))
             matriz_ventosa_stl = np.dot(matriz_brida, matriz_ajuste_local)
             
@@ -243,3 +309,60 @@ class RobotViewer3D(QWidget):
         if hasattr(self, 'item_ventosa'):
             color = (0.0, 0.8, 0.2, 1.0) if activo else (0.4, 0.4, 0.4, 1.0)
             self.item_ventosa.setColor(color)
+            
+    # ==========================================
+    # MOTOR DE BARRA DE ESTADO (ALARMAS)
+    # ==========================================
+    def mostrar_alerta(self, mensaje):
+        self.lbl_estado.setText(mensaje)
+        self.alarma_activa = True
+        
+        # Inferencia de prioridad
+        if "FALLA" in mensaje.upper() or "EMERGENCIA" in mensaje.upper():
+            self.nivel_alarma = "CRIT"
+        else:
+            self.nivel_alarma = "WARN"
+            
+        if not self.timer_alarma.isActive():
+            self.fase_alarma = True
+            self._animar_alarma() 
+            self.timer_alarma.start(800) # Intervalo de pulsación de color (800 ms)
+
+    def ocultar_alerta(self):
+        self.timer_alarma.stop()
+        self.alarma_activa = False
+        self.nivel_alarma = "OK"
+        self.texto_estado_base = "ROBOT EN ESPERA"
+        self.lbl_estado.setText(self.texto_estado_base) # Cambia este texto por el que prefieras
+        self.lbl_estado.setStyleSheet("""
+            background-color: transparent; 
+            color: rgba(152, 195, 121, 150); /* Verde tenue semi-transparente */
+            font-weight: bold; 
+            padding: 10px; 
+            font-family: Consolas; font-size: 14px;
+            border: none;
+        """)
+
+    def _animar_alarma(self):
+        if not self.alarma_activa: return
+        self.fase_alarma = not self.fase_alarma
+        
+        if self.nivel_alarma == "CRIT":
+            bg = "#ff0000" if self.fase_alarma else "#8b0000"
+            fg = "white"
+            border = "#ff4d4d" if self.fase_alarma else "#5c0000"
+        else: # WARN
+            bg = "#ffc107" if self.fase_alarma else "#b38600"
+            fg = "black"
+            border = "#ffeeba" if self.fase_alarma else "#806000"
+            
+        self.lbl_estado.setStyleSheet(f"""
+            background-color: {bg}; color: {fg}; font-weight: bold; 
+            padding: 10px; border-radius: 4px; font-family: Consolas; font-size: 14px;
+            border: 2px solid {border};
+        """)
+        
+    def set_texto_estado_base(self, texto):
+        self.texto_estado_base = texto
+        if not self.alarma_activa:
+            self.lbl_estado.setText(texto)
