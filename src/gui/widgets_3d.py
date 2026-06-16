@@ -366,3 +366,42 @@ class RobotViewer3D(QWidget):
         self.texto_estado_base = texto
         if not self.alarma_activa:
             self.lbl_estado.setText(texto)
+            
+    def cargar_caja_entorno(self):
+        import os
+        import numpy as np
+        from stl import mesh
+        import pyqtgraph.opengl as gl
+        
+        directorio_actual = os.path.dirname(os.path.abspath(__file__))
+        caja_path = os.path.abspath(os.path.join(directorio_actual, "..", "assets", "models", "meshes", "caja.stl"))
+        
+        try:
+            if os.path.exists(caja_path):
+                stl_caja = mesh.Mesh.from_file(caja_path)
+                raw_vectors = stl_caja.vectors.reshape(-1, 3) * 0.2
+                vertices, caras = np.unique(np.round(raw_vectors, 6), axis=0, return_inverse=True)
+                md_caja = gl.MeshData(vertexes=vertices, faces=caras.reshape(-1, 3))
+                
+                self.caja_visual = gl.GLMeshItem(meshdata=md_caja, smooth=False, color=(0.8, 0.5, 0.2, 1.0), shader='shaded')
+                self.canvas.addItem(self.caja_visual)
+                self.caja_visual.setVisible(False)
+                print("[3D Viewer] Caja STL cargada correctamente.")
+            else:
+                print("[ADVERTENCIA] No se encontró caja.stl.")
+        except Exception as e:
+            print(f"[CAJA ERROR] Falló la carga del STL: {e}")
+
+    def set_pose_caja(self, matriz_4x4):
+        if hasattr(self, 'caja_visual'):
+            self.caja_visual.setTransform(matriz_4x4)
+            
+    def obtener_pose_caja(self):
+        import numpy as np
+        if hasattr(self, 'caja_visual'):
+            return np.copy(self.caja_visual.transform().matrix())
+        return np.eye(4)
+
+    def set_visibilidad_caja(self, visible):
+        if hasattr(self, 'caja_visual'):
+            self.caja_visual.setVisible(visible)

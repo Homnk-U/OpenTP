@@ -92,14 +92,27 @@ class TPCompiler:
             else:
                 return {"comando": "ERROR", "mensaje": "Valor lógico DO inválido."}
 
-        # 3. Instrucción de Espera Temporal (Ej. "WAIT 0.5")
+        # 3. Instrucción de Espera (WAIT)
         elif linea.startswith("WAIT "):
-            try:
-                segundos = float(linea.replace("WAIT", "").strip())
-                milisegundos = int(segundos * 1000)
-                return {"comando": "WAIT", "tiempo_ms": milisegundos}
-            except ValueError:
-                return {"comando": "ERROR", "mensaje": "Parámetro numérico WAIT inválido."}
+            # Sub-caso A: Espera de señal digital (Ej. "WAIT DI[1]=ON")
+            if "DI[" in linea:
+                try:
+                    inicio = linea.find("[") + 1
+                    fin = linea.find("]")
+                    puerto = int(linea[inicio:fin])
+                    estado = "=ON" in linea
+                    return {"comando": "WAIT_DI", "puerto": puerto, "estado": estado}
+                except ValueError:
+                    return {"comando": "ERROR", "mensaje": "Sintaxis de puerto DI inválida."}
+                    
+            # Sub-caso B: Espera temporal clásica (Ej. "WAIT 0.5")
+            else:
+                try:
+                    segundos = float(linea.replace("WAIT", "").strip())
+                    milisegundos = int(segundos * 1000)
+                    return {"comando": "WAIT_TIME", "tiempo_ms": milisegundos}
+                except ValueError:
+                    return {"comando": "ERROR", "mensaje": "Parámetro numérico WAIT inválido."}
 
         # Instrucción desconocida
         return {"comando": "UNKNOWN", "mensaje": f"Instrucción no reconocida: {linea}"}
