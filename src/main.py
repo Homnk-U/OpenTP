@@ -28,7 +28,6 @@ def resolver_ruta(ruta_relativa):
         return os.path.join(sys._MEIPASS, ruta_relativa)
     return os.path.join(ruta_raiz, ruta_relativa)
 
-
 # =========================================================================
 # 1. HILO SECUNDARIO (Puro y seguro para fluidos de Qt)
 # =========================================================================
@@ -52,7 +51,6 @@ class HiloCargadorIndustrial(QThread):
         
         self.carga_completa_signal.emit()
 
-
 # =========================================================================
 # 2. INTERFAZ GRÁFICA: Pantalla de carga
 # =========================================================================
@@ -74,24 +72,30 @@ class PantallaDeCarga(QWidget):
         self.lbl_logo = QLabel()
         self.lbl_logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
-        ruta_logo = resolver_ruta(os.path.join("assets", "icons", "OpenTPOrnf.png"))
+        # Resolución de ruta y parche para Qt
+        ruta_logo = resolver_ruta(os.path.join("src", "assets", "icons", "OpenTPOrnf.png"))
+        ruta_logo_qt = ruta_logo.replace("\\", "/")
+        
         if os.path.exists(ruta_logo):
-            pixmap = QPixmap(ruta_logo).scaled(160, 160, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-            self.lbl_logo.setPixmap(pixmap)
+            pixmap = QPixmap(ruta_logo_qt)
+            if pixmap.isNull():
+                self._mostrar_texto_alternativo("ERROR: Archivo encontrado, pero QPixmap no puede leerlo.\n¿Es realmente un PNG válido?")
+            else:
+                pixmap = pixmap.scaled(160, 160, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                self.lbl_logo.setPixmap(pixmap)
         else:
-            self.lbl_logo.setText("< OpenTP Simulator >")
-            self.lbl_logo.setStyleSheet("color: #ff6b00; font-size: 26px; font-weight: bold; font-family: 'Consolas';")
+            self._mostrar_texto_alternativo(f"ERROR: Archivo no encontrado en:\n{ruta_logo_qt}")
             
         self.efecto_opacidad = QGraphicsOpacityEffect(self.lbl_logo)
         self.lbl_logo.setGraphicsEffect(self.efecto_opacidad)
         
         self.animacion_parpadeo = QPropertyAnimation(self.efecto_opacidad, b"opacity")
-        self.animacion_parpadeo.setDuration(1400)         
-        self.animacion_parpadeo.setStartValue(1.0)         
+        self.animacion_parpadeo.setDuration(1400)        
+        self.animacion_parpadeo.setStartValue(1.0)        
         self.animacion_parpadeo.setKeyValueAt(0.5, 0.25)   
-        self.animacion_parpadeo.setEndValue(1.0)           
+        self.animacion_parpadeo.setEndValue(1.0)          
         self.animacion_parpadeo.setEasingCurve(QEasingCurve.Type.InOutSine) 
-        self.animacion_parpadeo.setLoopCount(-1)           
+        self.animacion_parpadeo.setLoopCount(-1)          
         self.animacion_parpadeo.start()
         
         self.lbl_estatus = QLabel("Inicializando sistema...")
@@ -112,6 +116,15 @@ class PantallaDeCarga(QWidget):
         
         self.centrar_en_pantalla()
 
+    def _mostrar_texto_alternativo(self, mensaje_error=""):
+        texto = "< OpenTP Simulator >"
+        if mensaje_error:
+            texto += f"\n\n[Debug] {mensaje_error}"
+            self.lbl_logo.setStyleSheet("color: #ff6b00; font-size: 11px; font-weight: bold; font-family: 'Consolas';")
+        else:
+            self.lbl_logo.setStyleSheet("color: #ff6b00; font-size: 26px; font-weight: bold; font-family: 'Consolas';")
+        self.lbl_logo.setText(texto)
+
     def centrar_en_pantalla(self):
         geo = self.frameGeometry()
         centro = self.screen().availableGeometry().center()
@@ -124,16 +137,17 @@ class PantallaDeCarga(QWidget):
     def actualizar_texto(self, texto):
         self.lbl_estatus.setText(texto)
 
-
 # =========================================================================
 # 3. ORQUESTADOR PRINCIPAL
 # =========================================================================
 def main():
     app = QApplication(sys.argv)
     
-    ruta_icono = resolver_ruta(os.path.join("assets", "icons", "icon_OpenTP.ico"))
+    # También aplicamos el parche de la ruta al icono de la ventana
+    ruta_icono = resolver_ruta(os.path.join("src", "assets", "icons", "OpenTPOrnf.png"))
+    ruta_icono_qt = ruta_icono.replace("\\", "/")
     if os.path.exists(ruta_icono):
-        app.setWindowIcon(QIcon(ruta_icono))
+        app.setWindowIcon(QIcon(ruta_icono_qt))
         
     splash = PantallaDeCarga()
     splash.show()
