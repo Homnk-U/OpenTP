@@ -10,6 +10,7 @@ from PySide6.QtGui import QTextCursor, QTextFormat, QColor
 from gui.widgets_3d import RobotViewer3D
 from core.robot_controller import RobotController  # <-- Importamos el Cerebro
 from gui.scada_dashboard import DialogoInfoSistema
+from core.websocket_server import ServidorWebSockets
 
 class PanelControlIndustrial(QWidget):
     def __init__(self, viewer_3d, parent=None):
@@ -174,6 +175,11 @@ class MainWindow(QMainWindow):
         
         self.dialogo_info = DialogoInfoSistema(self)
         self.visor_3d.btn_info.clicked.connect(self.dialogo_info.show)
+        
+        # === INTEGRACIÓN WEBSOCKETS ===
+        self.hilo_websockets = ServidorWebSockets(self.panel_control.controller)
+        self.hilo_websockets.estado_conexion.connect(print) # Para ver los estados en la consola
+        self.dialogo_info.senal_conmutar_web.connect(self.gestionar_servidor_web)
 
     def eventFilter(self, obj, event):
         from PySide6.QtCore import QEvent
@@ -190,3 +196,15 @@ class MainWindow(QMainWindow):
     def showEvent(self, event):
         QApplication.instance().installEventFilter(self)
         super().showEvent(event)
+        
+    def gestionar_servidor_web(self, encender):
+        if encender:
+            self.hilo_websockets.start()
+        else:
+            self.hilo_websockets.detener()
+
+    def closeEvent(self, event):
+        """Asegura que el servidor en segundo plano se mate al cerrar la app"""
+        if hasattr(self, 'hilo_websockets') and self.hilo_websockets.isRunning():
+            self.hilo_websockets.detener()
+        super().closeEvent(event)

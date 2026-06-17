@@ -1,8 +1,11 @@
 import pyqtgraph as pg
 from PySide6.QtWidgets import (QDialog, QWidget, QHBoxLayout, QVBoxLayout, 
                                QFormLayout, QGroupBox, QLabel, QPushButton)
+from PySide6.QtCore import Signal
 
 class DialogoInfoSistema(QDialog):
+    senal_conmutar_web = Signal(bool)
+    
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("SCADA Dashboard - OpenTP")
@@ -90,7 +93,7 @@ class DialogoInfoSistema(QDialog):
             }
             QPushButton:hover { border: 2px solid #569cd6; }
         """)
-        # self.btn_web.toggled.connect(self.conmutar_servidor_web)
+        self.btn_web.toggled.connect(self.senal_conmutar_web.emit) # <-- Pon esto
         col_izq.addWidget(self.btn_web)
         # =======================================
         
