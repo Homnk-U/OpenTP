@@ -23,7 +23,7 @@ class PanelControlIndustrial(QWidget):
         # 2. Timer exclusivo para actualizar el SCADA UI a 10Hz
         self.timer_dashboard = QTimer(self)
         self.timer_dashboard.timeout.connect(self.actualizar_pantalla_scada)
-        self.timer_dashboard.start(100)
+        self.timer_dashboard.start(200)
         
         # --- DISEÑO VISUAL (UI) ---
         layout_maestro = QVBoxLayout(self)
