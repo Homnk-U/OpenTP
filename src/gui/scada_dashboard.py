@@ -1,11 +1,15 @@
 import os
 import sys
-import pyqtgraph as pg
+import time
 from PySide6.QtWidgets import (QDialog, QWidget, QHBoxLayout, QVBoxLayout, QStackedWidget, 
                                QFormLayout, QGroupBox, QLabel, QPushButton, 
-                               QListWidget, QTextEdit, QApplication)
-from PySide6.QtCore import Signal, Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices, QFont
+                               QListWidget, QTextEdit, QApplication, QRadioButton, QButtonGroup)
+from PySide6.QtCore import Signal, Qt, QTimer
+from PySide6.QtGui import QFont
+
+# Importamos nuestros dos nuevos módulos de visualización
+from gui.visor_basico import VisorBasico
+from gui.visor_detallado import VisorDetallado
 
 class DialogoManualSCADA(QDialog):
     def __init__(self, parent=None):
@@ -46,7 +50,6 @@ class DialogoManualSCADA(QDialog):
         self.paginas = QStackedWidget()
         self.paginas.setContentsMargins(20, 20, 20, 20)
 
-        # Configurar cada página
         self.paginas.addWidget(self.crear_pagina_introduccion())
         self.paginas.addWidget(self.crear_pagina_nodejs())
         self.paginas.addWidget(self.crear_pagina_instalacion())
@@ -58,17 +61,13 @@ class DialogoManualSCADA(QDialog):
         
         layout_principal.addWidget(self.lista_indice)
         layout_principal.addWidget(self.paginas)
-        
         self.lista_indice.setCurrentRow(0)
 
-    # --- LÓGICA DE FEEDBACK VISUAL PARA LOS BOTONES ---
     def animar_copiado(self, texto, boton, texto_original):
         QApplication.clipboard().setText(texto)
         boton.setText("Copiado")
-        # El timer regresa el texto a la normalidad después de 2 segundos
         QTimer.singleShot(2000, lambda: boton.setText(texto_original))
 
-    # --- HERRAMIENTA: BLOQUE DE CÓDIGO CON BOTÓN DE COPIAR ---
     def crear_bloque_codigo(self, comando):
         widget = QWidget()
         layout = QHBoxLayout(widget)
@@ -84,14 +83,11 @@ class DialogoManualSCADA(QDialog):
             QPushButton { background-color: #3a3d41; color: #d4d4d4; padding: 5px; border-radius: 4px; font-size: 11px; } 
             QPushButton:hover { background-color: #569cd6; color: white; }
         """)
-        
         btn_copiar.clicked.connect(lambda _, t=comando, b=btn_copiar: self.animar_copiado(t, b, "Copiar"))
         
         layout.addWidget(lbl_cmd)
         layout.addWidget(btn_copiar)
         return widget
-
-    # --- GENERADORES DE PÁGINAS ---
 
     def crear_pagina_introduccion(self):
         widget = QWidget()
@@ -118,8 +114,8 @@ class DialogoManualSCADA(QDialog):
         lbl_titulo = QLabel("Paso 1: Instalar Node.js"); lbl_titulo.setObjectName("titulo")
         lbl_texto = QLabel(
             "Node-RED está construido sobre Node.js, por lo que es el requisito principal.\n\n"
-            "1. Ve a tu navegador web y busca 'Descargar Node.js'.\n"
-            "2. Descarga la versión pre compilada de Node.js para Windows (recomendada para la mayoría de los usuarios), usando la arquitectura de tu computadora.\n"
+            "1. Ve a tu navegador web y busca 'Descargar Node.js'.\n\n"
+            "2. Descarga la versión pre compilada de Node.js para Windows (recomendada para la mayoría de los usuarios), usando la arquitectura de tu computadora.\n\n"
             "3. Ejecuta el instalador y presiona 'Siguiente' dejando todas las "
             "opciones por defecto.\n\n"
             "Una vez finalizada la instalación, puedes continuar con el siguiente paso."
@@ -137,17 +133,15 @@ class DialogoManualSCADA(QDialog):
         lbl_titulo = QLabel("Paso 2: Instalar Node-RED"); lbl_titulo.setObjectName("titulo")
         lbl_texto = QLabel(
             "La instalación se realiza a través de la terminal de Windows (PowerShell).\n\n"
-            "1. Abre PowerShell como Administrador.\n"
+            "1. Abre PowerShell como Administrador.\n\n"
             "2. Es probable que necesites habilitar la ejecución de scripts. Haz clic en 'Copiar', "
             "pégalo en la terminal y presiona Enter:"
         )
         lbl_texto.setWordWrap(True)
-        
         bloque_cmd1 = self.crear_bloque_codigo("Set-ExecutionPolicy RemoteSigned -Scope CurrentUser")
         
         lbl_texto2 = QLabel("\n3. Ahora, instala Node-RED globalmente con este comando:")
         lbl_texto2.setWordWrap(True)
-        
         bloque_cmd2 = self.crear_bloque_codigo("npm install -g --unsafe-perm node-red")
 
         layout.addWidget(lbl_titulo)
@@ -164,22 +158,20 @@ class DialogoManualSCADA(QDialog):
         lbl_titulo = QLabel("Paso 3: Iniciar el Servidor"); lbl_titulo.setObjectName("titulo")
         lbl_texto = QLabel(
             "Cada vez que quieras usar el Dashboard Web, necesitas encender Node-RED.\n\n"
-            "1. Abre una ventana normal de PowerShell.\n"
+            "1. Abre una ventana normal de PowerShell.\n\n"
             "2. Copia y ejecuta el siguiente comando:"
         )
         lbl_texto.setWordWrap(True)
-        
         bloque_cmd = self.crear_bloque_codigo("node-red")
         
         lbl_nota = QLabel(
-            "\n⚠️ IMPORTANTE: La ventana negra de PowerShell comenzará a mostrar texto. "
+            "\nIMPORTANTE: La ventana negra de PowerShell comenzará a mostrar texto. "
             "DEBES MANTENERLA ABIERTA. Si la cierras, el servidor web se apagará.\n\n"
             "3. En tu navegador de la computadora, entra a:"
         )
         lbl_nota.setWordWrap(True)
         lbl_nota.setStyleSheet("color: #d7ba7d; font-weight: bold;")
-
-        bloque_url = self.crear_bloque_codigo("http://localhost:1880")
+        bloque_url = self.crear_bloque_codigo("http://localhost:1880/dashboard")
 
         layout.addWidget(lbl_titulo)
         layout.addWidget(lbl_texto)
@@ -194,24 +186,22 @@ class DialogoManualSCADA(QDialog):
         layout = QVBoxLayout(widget)
         lbl_titulo = QLabel("Paso 4: Importar Dashboard"); lbl_titulo.setObjectName("titulo")
         lbl_texto = QLabel(
-            "1. En la interfaz de Node-RED, ve al menú superior derecho y selecciona 'Import'.\n"
-            "2. Haz clic en el botón de abajo para copiar todo el código de nuestro sistema.\n"
-            "3. Pégalo en la ventana de Node-RED y presiona Importar.\n"
-            "4. Haz clic en el botón rojo 'Deploy' en la esquina superior derecha."
+            "1. En la interfaz de Node-RED, ve al menú superior derecho y selecciona 'Import'.\n\n"
+            "2. Haz clic en el botón de abajo para copiar todo el código de nuestro sistema.\n\n"
+            "3. Pégalo en la ventana de Node-RED y presiona Importar.\n\n"
+            "4. Haz clic en el botón rojo 'Deploy' en la esquina superior derecha.\n"
         )
         lbl_texto.setWordWrap(True)
         
         self.txt_json = QTextEdit()
         self.txt_json.setReadOnly(True)
         
-        # --- LÓGICA DE CARGA DINÁMICA DEL ARCHIVO JSON ---
         if hasattr(sys, '_MEIPASS'):
             ruta_proyecto = sys._MEIPASS
         else:
             ruta_proyecto = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
             
         ruta_json_raiz = os.path.join(ruta_proyecto, "OpenTP_Dashboard.json")
-        
         texto_json = ""
         if os.path.exists(ruta_json_raiz):
             with open(ruta_json_raiz, "r", encoding="utf-8") as f:
@@ -232,7 +222,7 @@ class DialogoManualSCADA(QDialog):
 
     def copiar_json_completo(self):
         QApplication.clipboard().setText(self.txt_json.toPlainText())
-        boton = self.sender() # Identifica qué botón disparó esta función
+        boton = self.sender() 
         if boton:
             boton.setText("Copiado")
             QTimer.singleShot(2000, lambda: boton.setText("Copiar al Portapapeles"))
@@ -248,7 +238,6 @@ class DialogoManualSCADA(QDialog):
             "Abre PowerShell y ejecuta este comando:"
         )
         lbl_texto1.setWordWrap(True)
-        
         bloque_ipconfig = self.crear_bloque_codigo("ipconfig")
         
         lbl_texto2 = QLabel(
@@ -257,7 +246,6 @@ class DialogoManualSCADA(QDialog):
             "con el puerto 1880 y la ruta del dashboard (reemplaza las letras por tus números):"
         )
         lbl_texto2.setWordWrap(True)
-        
         bloque_url = self.crear_bloque_codigo("http://<TU_IP_AQUI>:1880/dashboard")
         
         layout.addWidget(lbl_titulo)
@@ -275,7 +263,7 @@ class DialogoInfoSistema(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("SCADA Dashboard - OpenTP")
-        self.resize(1000, 700) 
+        self.resize(1050, 750) 
         self.setStyleSheet("""
             QDialog { background-color: #1e1e1e; color: #d4d4d4; }
             QLabel { color: #d4d4d4; font-size: 13px; font-weight: bold; }
@@ -287,7 +275,11 @@ class DialogoInfoSistema(QDialog):
         """)
 
         layout_principal = QHBoxLayout(self)
+        layout_principal.setContentsMargins(15, 15, 15, 15)
         
+        # =================================================================
+        # COLUMNA IZQUIERDA: Textos y Datos Numéricos (Fijos)
+        # =================================================================
         contenedor_izq = QWidget()
         contenedor_izq.setFixedWidth(300) 
         col_izq = QVBoxLayout(contenedor_izq) 
@@ -345,9 +337,8 @@ class DialogoInfoSistema(QDialog):
         form_joints.addRow("J6:", self.lbl_j6)
         col_izq.addWidget(grupo_joints)
         
-        # === BOTÓN DE TRANSMISIÓN Y AYUDA ===
+        # === BOTONES DE RED ===
         layout_botones_web = QHBoxLayout()
-        
         self.btn_web = QPushButton("TRANSMITIR A SCADA WEB")
         self.btn_web.setCheckable(True) 
         self.btn_web.setStyleSheet("""
@@ -355,12 +346,12 @@ class DialogoInfoSistema(QDialog):
             QPushButton:checked { background-color: #17a2b8; color: white; border: 2px solid #17a2b8; }
         """)
         self.btn_web.toggled.connect(self.senal_conmutar_web.emit)
+        self.btn_web.toggled.connect(lambda checked: self.btn_web.setText("TRANSMITIENDO..." if checked else "TRANSMITIR A SCADA WEB"))
         
         self.btn_ayuda_web = QPushButton("?")
         self.btn_ayuda_web.setFixedSize(40, 42)
         self.btn_ayuda_web.setStyleSheet("QPushButton { background-color: #404040; color: white; font-weight: bold; border-radius: 6px; font-size: 16px; } QPushButton:hover { background-color: #569cd6; }")
         
-        # Instanciamos la ventana de ayuda y la conectamos al botón
         self.dialogo_ayuda = DialogoManualSCADA(self)
         self.btn_ayuda_web.clicked.connect(self.dialogo_ayuda.show)
         
@@ -368,63 +359,100 @@ class DialogoInfoSistema(QDialog):
         layout_botones_web.addWidget(self.btn_ayuda_web, stretch=0)
         
         col_izq.addLayout(layout_botones_web)
-        # =======================================
-        
         col_izq.addStretch()
         layout_principal.addWidget(contenedor_izq)
-
-        # Configuración de Gráficas (Columna Derecha)
+        
+        
+        # =================================================================
+        # COLUMNA DERECHA: El Enrutador de Vistas (Gauges vs Gráficas)
+        # =================================================================
         col_der = QVBoxLayout()
-        self.max_historia = 150
-        self.hist_tiempo = []
-        self.hist_temp = [[] for _ in range(6)]
-        self.hist_curr = [[] for _ in range(6)]
-        self.tiempo_x = 0.0
-
-        self.colores = [(255,100,100), (100,255,100), (100,100,255), (255,255,100), (255,100,255), (100,255,255)]
-        pg.setConfigOption('background', '#1e1e1e')
-        pg.setConfigOption('foreground', '#d4d4d4')
-
-        self.plot_temp = pg.PlotWidget(title="Temperatura de Motores (°C)")
-        self.plot_temp.showGrid(x=True, y=True, alpha=0.3)
-        self.plot_temp.addLegend(offset=(10, 10))
-        self.plot_temp.setLimits(xMin=0)
-        self.curvas_temp = []
-        for i in range(6):
-            curva = self.plot_temp.plot(pen=pg.mkPen(color=self.colores[i], width=2), name=f"J{i+1}")
-            self.curvas_temp.append(curva)
-        col_der.addWidget(self.plot_temp)
-
-        self.plot_curr = pg.PlotWidget(title="Consumo Eléctrico (A)")
-        self.plot_curr.showGrid(x=True, y=True, alpha=0.3)
-        self.plot_curr.addLegend(offset=(10, 10))
-        self.plot_curr.setLimits(xMin=0)
-        self.curvas_curr = []
-        for i in range(6):
-            curva = self.plot_curr.plot(pen=pg.mkPen(color=self.colores[i], width=2), name=f"J{i+1}")
-            self.curvas_curr.append(curva)
-        col_der.addWidget(self.plot_curr)
-
+        
+        # 1. Menú Switch Superior (Control Segmentado)
+        layout_switch = QHBoxLayout()
+        layout_switch.setSpacing(0) # Pegamos los botones para que parezcan uno solo
+        
+        self.btn_basico = QPushButton("MODO BÁSICO")
+        self.btn_basico.setCheckable(True)
+        self.btn_basico.setChecked(True)
+        self.btn_basico.setCursor(Qt.PointingHandCursor)
+        
+        self.btn_detallado = QPushButton("MODO DETALLADO")
+        self.btn_detallado.setCheckable(True)
+        self.btn_detallado.setCursor(Qt.PointingHandCursor)
+        
+        # Estilo base: Fondo oscuro y letra gris cuando no están seleccionados
+        estilo_base = """
+            QPushButton { 
+                background-color: #2d2d2d; 
+                color: #858585; 
+                font-weight: bold; 
+                font-size: 13px; 
+                padding: 10px; 
+                border: 1px solid #404040; 
+            }
+            QPushButton:checked { 
+                background-color: #007acc; 
+                color: white; 
+                border: 1px solid #007acc;
+            }
+        """
+        
+        # Redondeamos solo los extremos exteriores para crear la "píldora"
+        self.btn_basico.setStyleSheet(estilo_base + "QPushButton { border-top-left-radius: 6px; border-bottom-left-radius: 6px; border-right: none; }")
+        self.btn_detallado.setStyleSheet(estilo_base + "QPushButton { border-top-right-radius: 6px; border-bottom-right-radius: 6px; border-left: none; }")
+        
+        # Agrupamos los botones para que actúen de forma exclusiva (si uno se enciende, el otro se apaga)
+        self.grupo_vistas = QButtonGroup(self)
+        self.grupo_vistas.setExclusive(True)
+        self.grupo_vistas.addButton(self.btn_basico, 0)
+        self.grupo_vistas.addButton(self.btn_detallado, 1)
+        
+        layout_switch.addWidget(self.btn_basico)
+        layout_switch.addWidget(self.btn_detallado)
+        col_der.addLayout(layout_switch)
+        
+        # 2. Apilador de Vistas Dinámicas
+        self.stack_vistas = QStackedWidget()
+        
+        # Instanciamos los módulos modulares
+        self.panel_basico = VisorBasico()
+        self.panel_detallado = VisorDetallado()
+        
+        self.stack_vistas.addWidget(self.panel_basico)     # Índice 0 (Por defecto)
+        self.stack_vistas.addWidget(self.panel_detallado)  # Índice 1
+        
+        col_der.addWidget(self.stack_vistas)
         layout_principal.addLayout(col_der)
+        
+        # Conectamos el grupo directamente al apilador (Ya no necesitamos la función _conmutar_vista)
+        self.grupo_vistas.idToggled.connect(self.stack_vistas.setCurrentIndex)
+        
+        # Reloj interno para estrangular el envío de datos al Modo Básico
+        self.ultimo_tiempo_gauges = 0.0
+
+    def _conmutar_vista(self, checked):
+        if checked:
+            self.btn_modo_vista.setText("MODO DETALLADO")
+            self.stack_vistas.setCurrentIndex(1)
+        else:
+            self.btn_modo_vista.setText("MODO BÁSICO")
+            self.stack_vistas.setCurrentIndex(0)
 
     def actualizar_datos(self, datos):
+        # 1. === ACTUALIZACIÓN DE PANEL IZQUIERDO ===
         self.lbl_modo.setText(datos["modo_operacion"])
         self.lbl_modo.setStyleSheet("color: #ce9178;" if "MANUAL" in datos["modo_operacion"] else "color: #4ec9b0;")
         
-        # === FIX DE RENDIMIENTO: SOLO REPINTAR CSS SI HAY CAMBIO ===
         es_seguro = datos["seguridad"]["deadman"]
         texto_seguro = "ACTIVO" if es_seguro else "INACTIVO"
-        
-        # Solo aplicamos el estilo si el texto es diferente al que ya tiene
         if self.lbl_deadman.text() != texto_seguro:
             self.lbl_deadman.setText(texto_seguro)
             self.lbl_deadman.setObjectName("valor" if es_seguro else "alerta")
             self.lbl_deadman.style().unpolish(self.lbl_deadman)
             self.lbl_deadman.style().polish(self.lbl_deadman)
-        # ===========================================================
-        
+            
         self.lbl_estop.setText("EMERGENCIA" if datos["seguridad"]["e_stop"] else "OK")
-        
         self.lbl_vacio.setText("SUCCIONANDO" if datos["vacio_activo"] else "APAGADO")
         self.lbl_payload.setText(f"{datos['payload_kg']:.1f} kg")
         self.lbl_ciclos.setText(str(datos["ciclos_total"]))
@@ -441,24 +469,24 @@ class DialogoInfoSistema(QDialog):
         self.lbl_j5.setText(f"{datos['j5']:.2f}°")
         self.lbl_j6.setText(f"{datos['j6']:.2f}°")
 
-        self.tiempo_x += 0.1 
-        self.hist_tiempo.append(self.tiempo_x)
+        # 2. === ENRUTAMIENTO DINÁMICO DE PANELES DERECHOS ===
         
-        # === FIX DE MEMORIA: VENTANA DESLIZANTE ===
-        # Si excedemos los 150 puntos, borramos los más viejos
-        if len(self.hist_tiempo) > self.max_historia:
-            self.hist_tiempo = self.hist_tiempo[-self.max_historia:]
-        
-        for i in range(6):
-            self.hist_temp[i].append(datos["temperaturas_c"][i])
-            self.hist_curr[i].append(datos["corrientes_a"][i])
+        # MODO DETALLADO: Lazy Rendering (Solo consume CPU si está a la vista)
+        if self.stack_vistas.currentIndex() == 1:
+            try:
+                # Recuperamos la ruta original exacta que sí funcionaba en tu código
+                controlador = self.parent().panel_control.controller
+                datos_historicos = controlador.historian.obtener_datos_hmi()
+                
+                # Inyectamos los datos directamente a las curvas
+                self.panel_detallado.actualizar_graficas(datos_historicos)
+            except AttributeError:
+                # Previene errores si la UI carga milisegundos antes que el backend
+                pass
             
-            # Recortamos también la memoria de las variables de motores
-            if len(self.hist_temp[i]) > self.max_historia:
-                self.hist_temp[i] = self.hist_temp[i][-self.max_historia:]
-                self.hist_curr[i] = self.hist_curr[i][-self.max_historia:]
-            
-            # Actualizamos la gráfica solo con la ventana deslizante
-            t_axis = list(self.hist_tiempo)
-            self.curvas_temp[i].setData(t_axis, list(self.hist_temp[i]))
-            self.curvas_curr[i].setData(t_axis, list(self.hist_curr[i]))
+        # MODO BÁSICO: Filtro a 2.5Hz para los Gauges
+        elif self.stack_vistas.currentIndex() == 0:
+            tiempo_actual = time.time()
+            if tiempo_actual - self.ultimo_tiempo_gauges >= 0.4:
+                self.panel_basico.actualizar_datos(datos)
+                self.ultimo_tiempo_gauges = tiempo_actual

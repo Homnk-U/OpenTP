@@ -45,7 +45,7 @@ class HiloCargadorIndustrial(QThread):
         self.progreso_signal.emit(60)
         time.sleep(0.4)
         
-        self.estatus_signal.emit("Preparando mallas dinámicas del FANUC M-900iA...")
+        self.estatus_signal.emit("Preparando mallas dinámicas...")
         self.progreso_signal.emit(85)
         time.sleep(0.2)
         

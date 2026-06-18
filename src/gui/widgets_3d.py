@@ -5,7 +5,6 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QPushButton,
 from PySide6.QtCore import Qt, QSize, QTimer
 from PySide6.QtGui import QVector3D, QFont, QIcon
 import pyqtgraph.opengl as gl
-import ikpy.chain
 from stl import mesh
 
 class RobotViewer3D(QWidget):
@@ -42,7 +41,7 @@ class RobotViewer3D(QWidget):
 
         self.lbl_estado = QLabel("Standby")
         self.lbl_estado.setAlignment(Qt.AlignCenter)
-        self.lbl_estado.setFixedWidth(450) # Ancho fijo para evitar inestabilidad
+        self.lbl_estado.setFixedWidth(450)
 
         self.lbl_deadman = QLabel("DEADMAN SWITCH: RELEASED")
         self.lbl_deadman.setAlignment(Qt.AlignCenter)
@@ -59,7 +58,6 @@ class RobotViewer3D(QWidget):
         self.fase_alarma = False
         self.nivel_alarma = "OK"
 
-        # Inicializar estilos visuales base
         self.ocultar_alerta()
         self.set_deadman_state(False)
 
@@ -173,7 +171,7 @@ class RobotViewer3D(QWidget):
         layout_principal.addWidget(self.toolbar_vista, 0, 0, Qt.AlignVCenter | Qt.AlignRight)
 
         # ==========================================
-        # ENTORNO 3D Y CINEMÁTICA
+        # ENTORNO 3D Y CARGA DE MALLAS
         # ==========================================
         grid = gl.GLGridItem()
         grid.setSize(x=10, y=10, z=10)
@@ -188,18 +186,9 @@ class RobotViewer3D(QWidget):
             eje.setDepthValue(1000) 
             self.canvas.addItem(eje)
 
-        try:
-            mascara_activos = [False, True, True, True, True, True, True, False, False]
-            self.chain = ikpy.chain.Chain.from_urdf_file("src/assets/models/robot_fanuc.urdf", active_links_mask=mascara_activos)
-        except Exception as e:
-            print(f"[ERROR 3D] Falló la carga del URDF: {e}")
-            self.chain = None
-
         self.mallas_visuales = []
-        if self.chain:
-            self.cargar_mallas_principales()
-            self.actualizar_posicion_visual([0.0] * len(self.chain.links))
-            self.view_home()
+        self.cargar_mallas_principales()
+        self.view_home()
 
     # ==========================================
     # MÉTODOS DE LA INTERFAZ
@@ -231,61 +220,66 @@ class RobotViewer3D(QWidget):
     def view_fit(self): self.canvas.setCameraPosition(distance=5.5, elevation=self.canvas.opts['elevation'], azimuth=self.canvas.opts['azimuth'], pos=QVector3D(0, 0, 1.2))
 
     def cargar_mallas_principales(self):
-            directorio_actual = os.path.dirname(os.path.abspath(__file__))
-            base_path = os.path.abspath(os.path.join(directorio_actual, "..", "assets", "models", "meshes"))
-            mapeo_links = {
-                "Base link": "base_link.stl", "joint_1": "link_1.stl", "joint_2": "link_2.stl", 
-                "joint_3": "link_3.stl", "joint_4": "link_4.stl", "joint_5": "link_5.stl", "joint_6": "link_6.stl"
-            }
-            
-            for i, link in enumerate(self.chain.links):
-                if link.name in mapeo_links:
-                    stl_path = os.path.join(base_path, mapeo_links[link.name])
-                    if os.path.exists(stl_path):
-                        try:
-                            stl_data = mesh.Mesh.from_file(stl_path)
-                            raw_vectors = stl_data.vectors.reshape(-1, 3)
-                            rounded_vectors = np.round(raw_vectors, 6) 
-                            vertices, caras = np.unique(rounded_vectors, axis=0, return_inverse=True)
-                            caras = caras.reshape(-1, 3)
-                            mesh_data = gl.MeshData(vertexes=vertices, faces=caras)
-                            
-                            color_mesh = (0.4, 0.4, 0.42, 1.0) if link.name in ["Base link", "joint_6", "joint_4", "joint_2"] else (1.0, 0.85, 0.1, 1.0)
-                            
-                            item = gl.GLMeshItem(meshdata=mesh_data, smooth=True, computeNormals=True, color=color_mesh, shader='shaded')
-                            self.canvas.addItem(item)
-                            self.mallas_visuales.append({"item": item, "joint_index": i})
-                        except Exception as e:
-                            print(f"Error cargando {link.name}: {e}")
-                            
-            try:
-                ventosa_path = os.path.join(base_path, "ventosa.stl")
-                if os.path.exists(ventosa_path):
-                    stl_ventosa = mesh.Mesh.from_file(ventosa_path)
-                    raw_vectors = stl_ventosa.vectors.reshape(-1, 3)
-                    
-                    escala_ventosa = 0.05
-                    raw_vectors = raw_vectors * escala_ventosa
-                    
+        directorio_actual = os.path.dirname(os.path.abspath(__file__))
+        base_path = os.path.abspath(os.path.join(directorio_actual, "..", "assets", "models", "meshes"))
+        
+        eslabones_ordenados = [
+            ("Base link", "base_link.stl"),
+            ("joint_1", "link_1.stl"),
+            ("joint_2", "link_2.stl"),
+            ("joint_3", "link_3.stl"),
+            ("joint_4", "link_4.stl"),
+            ("joint_5", "link_5.stl"),
+            ("joint_6", "link_6.stl")
+        ]
+        
+        for i, (nombre_link, archivo_stl) in enumerate(eslabones_ordenados):
+            stl_path = os.path.join(base_path, archivo_stl)
+            if os.path.exists(stl_path):
+                try:
+                    stl_data = mesh.Mesh.from_file(stl_path)
+                    raw_vectors = stl_data.vectors.reshape(-1, 3)
                     rounded_vectors = np.round(raw_vectors, 6) 
                     vertices, caras = np.unique(rounded_vectors, axis=0, return_inverse=True)
                     caras = caras.reshape(-1, 3)
                     mesh_data = gl.MeshData(vertexes=vertices, faces=caras)
                     
-                    self.item_ventosa = gl.GLMeshItem(meshdata=mesh_data, smooth=True, color=(0.4, 0.4, 0.4, 1.0), shader='shaded')
-                    self.canvas.addItem(self.item_ventosa)
-            except Exception as e:
-                print(f"[VENTOSA ERROR] No se pudo cargar el STL: {e}")
+                    color_mesh = (0.4, 0.4, 0.42, 1.0) if nombre_link in ["Base link", "joint_6", "joint_4", "joint_2"] else (1.0, 0.85, 0.1, 1.0)
+                    
+                    item = gl.GLMeshItem(meshdata=mesh_data, smooth=True, computeNormals=True, color=color_mesh, shader='shaded')
+                    self.canvas.addItem(item)
+                    
+                    self.mallas_visuales.append({"item": item, "joint_index": i})
+                except Exception as e:
+                    print(f"Error cargando {nombre_link}: {e}")
+                    
+        try:
+            ventosa_path = os.path.join(base_path, "ventosa.stl")
+            if os.path.exists(ventosa_path):
+                stl_ventosa = mesh.Mesh.from_file(ventosa_path)
+                raw_vectors = stl_ventosa.vectors.reshape(-1, 3)
+                
+                escala_ventosa = 0.05
+                raw_vectors = raw_vectors * escala_ventosa
+                
+                rounded_vectors = np.round(raw_vectors, 6) 
+                vertices, caras = np.unique(rounded_vectors, axis=0, return_inverse=True)
+                caras = caras.reshape(-1, 3)
+                mesh_data = gl.MeshData(vertexes=vertices, faces=caras)
+                
+                self.item_ventosa = gl.GLMeshItem(meshdata=mesh_data, smooth=True, color=(0.4, 0.4, 0.4, 1.0), shader='shaded')
+                self.canvas.addItem(self.item_ventosa)
+        except Exception as e:
+            print(f"[VENTOSA ERROR] No se pudo cargar el STL: {e}")
 
-    def actualizar_posicion_visual(self, joints_angles):
-        if not self.chain or not self.mallas_visuales: return
-        transformaciones = self.chain.forward_kinematics(joints_angles, full_kinematics=True)
+    def actualizar_posicion_visual(self, matrices_transformacion):
+        if not self.mallas_visuales or matrices_transformacion is None: return
         
         for malla in self.mallas_visuales:
-            malla["item"].setTransform(transformaciones[malla["joint_index"]])
+            malla["item"].setTransform(matrices_transformacion[malla["joint_index"]])
             
-        if hasattr(self, 'item_ventosa'):
-            matriz_brida = transformaciones[-3] 
+        if hasattr(self, 'item_ventosa') and len(matrices_transformacion) >= 3:
+            matriz_brida = matrices_transformacion[-3] 
             
             rot_x = np.radians(self.ventosa_rot_x)
             rot_y = np.radians(self.ventosa_rot_y)
@@ -326,17 +320,17 @@ class RobotViewer3D(QWidget):
         if not self.timer_alarma.isActive():
             self.fase_alarma = True
             self._animar_alarma() 
-            self.timer_alarma.start(800) # Intervalo de pulsación de color (800 ms)
+            self.timer_alarma.start(800)
 
     def ocultar_alerta(self):
         self.timer_alarma.stop()
         self.alarma_activa = False
         self.nivel_alarma = "OK"
         self.texto_estado_base = "ROBOT EN ESPERA"
-        self.lbl_estado.setText(self.texto_estado_base) # Cambia este texto por el que prefieras
+        self.lbl_estado.setText(self.texto_estado_base)
         self.lbl_estado.setStyleSheet("""
             background-color: transparent; 
-            color: rgba(152, 195, 121, 150); /* Verde tenue semi-transparente */
+            color: rgba(152, 195, 121, 150);
             font-weight: bold; 
             padding: 10px; 
             font-family: Consolas; font-size: 14px;
@@ -351,7 +345,7 @@ class RobotViewer3D(QWidget):
             bg = "#ff0000" if self.fase_alarma else "#8b0000"
             fg = "white"
             border = "#ff4d4d" if self.fase_alarma else "#5c0000"
-        else: # WARN
+        else:
             bg = "#ffc107" if self.fase_alarma else "#b38600"
             fg = "black"
             border = "#ffeeba" if self.fase_alarma else "#806000"

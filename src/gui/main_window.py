@@ -44,6 +44,7 @@ class PanelControlIndustrial(QWidget):
         self.editor_codigo = QTextEdit()
         self.editor_codigo.setStyleSheet("background-color: white; color: black; font-family: Consolas; font-size: 14px;")
         self.editor_codigo.setText("J P[1] 100% FINE\nJ P[2] 100% FINE")
+        self.editor_codigo.setMinimumHeight(150)
         layout_editor.addWidget(self.editor_codigo)
         self.btn_ejecutar = QPushButton("EJECUTAR PROGRAMA")
         self.btn_ejecutar.setStyleSheet("background-color: #28a745; color: white; font-weight: bold; padding: 10px; border-radius: 4px;")
@@ -66,10 +67,18 @@ class PanelControlIndustrial(QWidget):
         
         for fila, (t_neg, t_pos) in enumerate([("-J1", "+J1"), ("-J2", "+J2"), ("-J3", "+J3"), ("-J4", "+J4"), ("-J5", "+J5"), ("-J6", "+J6")]):
             b_neg, b_pos = QPushButton(t_neg), QPushButton(t_pos)
-            for b in (b_neg, b_pos): b.setAutoRepeat(True); b.setStyleSheet(estilo_btns)
+            for b in (b_neg, b_pos): 
+                b.setAutoRepeat(True)
+                # --- NUEVA CONFIGURACIÓN DE FLUIDEZ ---
+                b.setAutoRepeatDelay(150)   # Reacciona más rápido al mantenerlo presionado
+                b.setAutoRepeatInterval(33) # Se dispara a ~30Hz en lugar de 10Hz
+                # --------------------------------------
+                b.setStyleSheet(estilo_btns)
+            
             b_neg.clicked.connect(partial(self.controller.procesar_jog_click, fila, -1))
             b_pos.clicked.connect(partial(self.controller.procesar_jog_click, fila, 1))
-            layout_jog.addWidget(b_neg, fila + 1, 0); layout_jog.addWidget(b_pos, fila + 1, 1)
+            layout_jog.addWidget(b_neg, fila + 1, 0)
+            layout_jog.addWidget(b_pos, fila + 1, 1)
 
         self.btn_grabar_punto = QPushButton("Grabar posición P[1]")
         self.btn_grabar_punto.setStyleSheet("background-color: #ffc107; color: black; font-weight: bold; padding: 8px; border-radius: 4px; margin-top: 10px;")
@@ -121,7 +130,13 @@ class PanelControlIndustrial(QWidget):
         idx = self.controller.siguiente_id_punto
         angulos = self.controller.current_angles_deg
         self.controller.compilador.guardar_punto(idx, angulos)
-        x, y, z = self.controller.current_x, self.current_y, self.current_z
+        
+        # === FIX: Referencias correctas al controlador para Y y Z ===
+        x = self.controller.current_x
+        y = self.controller.current_y
+        z = self.controller.current_z
+        # ============================================================
+        
         self.controller.viewer_3d.lista_puntos.addItem(f"P[{idx}]: X={x:6.1f}  Y={y:6.1f}  Z={z:6.1f}")
         
         self.controller.siguiente_id_punto += 1
@@ -160,7 +175,7 @@ class PanelControlIndustrial(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("OpenTP Simulator - FANUC M-900iA")
+        self.setWindowTitle("OpenTP Simulator")
         self.resize(1200, 700)
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -207,4 +222,7 @@ class MainWindow(QMainWindow):
         """Asegura que el servidor en segundo plano se mate al cerrar la app"""
         if hasattr(self, 'hilo_websockets') and self.hilo_websockets.isRunning():
             self.hilo_websockets.detener()
+        # Cerramos el archivo CSV de forma segura
+        if hasattr(self.panel_control, 'controller'):
+            self.panel_control.controller.historian.cerrar_historian()
         super().closeEvent(event)

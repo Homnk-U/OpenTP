@@ -2,8 +2,10 @@ import time
 import numpy as np
 from PySide6.QtCore import QObject, QTimer, QVariantAnimation, QEasingCurve
 
+from core.historian import RobotHistorian
 from core.tp_compiler import TPCompiler
 from core.physics import MotorPhysics
+from core.kinematics import KinematicsEngine
 
 class RobotController(QObject):
     def __init__(self, viewer_3d, ui_panel=None):
@@ -12,6 +14,8 @@ class RobotController(QObject):
         self.ui_panel = ui_panel  # Referencia a la UI para actualizar botones/textos visuales
         self.compilador = TPCompiler()
         self.fisica_motores = MotorPhysics()
+        self.cinematica = KinematicsEngine()
+        self.historian = RobotHistorian()
         
         # Estado del Robot
         self.current_angles_deg = [0.0] * 6 
@@ -60,6 +64,11 @@ class RobotController(QObject):
         self.pasos_demo = []
         self.paso_actual_demo = 0
 
+        # === FIX DEL ROBOT APLASTADO ===
+        # Forzamos el cálculo cinemático inicial para que los STL se coloquen 
+        # en su posición de Home (0°) en el frame 1.
+        self.actualizar_cinematica_local()
+
     # ==========================================
     # LÓGICA DE SEGURIDAD (DCS)
     # ==========================================
@@ -70,15 +79,13 @@ class RobotController(QObject):
                 print(f"[DCS] Límite mecánico superado en J{i+1}: {angulos[i]:.1f}°")
                 return False
 
-        if hasattr(self.viewer_3d, 'chain') and self.viewer_3d.chain:
-            angulos_rad = np.radians(angulos)
-            vector_full = [0.0] * len(self.viewer_3d.chain.links)
-            vector_full[1:7] = angulos_rad
-            matrices = self.viewer_3d.chain.forward_kinematics(vector_full, full_kinematics=True)
-            for idx in [-2, -1]:
+        # USAMOS EL NUEVO MOTOR PARA CHECAR COLISIONES CONTRA EL PISO
+        if self.cinematica.chain:
+            matrices = self.cinematica.calcular_cinematica_directa(angulos)
+            for idx in [-2, -1]: # Revisar los últimos eslabones
                 x, y, z = matrices[idx][:3, 3]
-                if z < 0.05: return False
-                if np.sqrt(x**2 + y**2) < 0.40 and z < 0.8: return False
+                if z < 0.05: return False # Choca contra el piso
+                if np.sqrt(x**2 + y**2) < 0.40 and z < 0.8: return False # Choca contra la propia base
         return True
 
     def activar_paro_emergencia(self):
@@ -120,7 +127,7 @@ class RobotController(QObject):
         
         if self.verificar_limites_seguros(angulos_tentativos):
             self.current_angles_deg[joint_index] = angulos_tentativos[joint_index]
-            self.actualizar_cinematica_local()
+            
             if self.viewer_3d.alarma_activa and "LÍMITE" in self.viewer_3d.lbl_estado.text():
                 self.viewer_3d.ocultar_alerta()
         else:
@@ -159,28 +166,56 @@ class RobotController(QObject):
     def actualizar_bucle_fisico(self):
         deltas = [self.current_angles_deg[i] - self.angulos_anteriores[i] for i in range(6)]
         self.fisica_motores.simular_paso_tiempo(deltas)
+        
+        # === SUPER OPTIMIZACIÓN DE FPS ===
+        # Solo hacemos matemática de matrices y repintamos el 3D si hubo un cambio real
+        if any(d != 0.0 for d in deltas):
+            self.actualizar_cinematica_local()
+            
         self.angulos_anteriores = list(self.current_angles_deg)
-        self.actualizar_cinematica_local()
+        
+        # El registro de datos sigue corriendo a 30Hz ininterrumpidamente
+        estado_actual = self.obtener_estado_diccionario()
+        self.historian.registrar_paso(estado_actual, dt=0.0333)
 
     def actualizar_cinematica_local(self):
-        angulos_rad = np.radians(self.current_angles_deg)
-        vector_full = [0.0] * len(self.viewer_3d.chain.links)
-        vector_full[1:7] = angulos_rad 
-        self.viewer_3d.actualizar_posicion_visual(vector_full)
+        # 1. Verificamos que el motor matemático esté listo
+        if not hasattr(self, 'cinematica') or not self.cinematica.chain: 
+            return
+            
+        # 2. Calculamos toda la matemática de matrices en el Backend (Headless)
+        matrices_transformacion = self.cinematica.calcular_cinematica_directa(self.current_angles_deg)
         
-        fk_matrix = self.viewer_3d.chain.forward_kinematics(vector_full)
+        # 3. Le ordenamos a la interfaz visual que dibuje los STL en esas coordenadas
+        self.viewer_3d.actualizar_posicion_visual(matrices_transformacion)
+        
+        # 4. Extraemos la posición del TCP (El último eslabón de la matriz calculada)
+        fk_matrix = matrices_transformacion[-1]
         x_m, y_m, z_m = fk_matrix[:3, 3] 
-        self.current_x, self.current_y, self.current_z = round(x_m * 1000, 2), round(y_m * 1000, 2), round(z_m * 1000, 2)
+        self.current_x = round(x_m * 1000, 2)
+        self.current_y = round(y_m * 1000, 2)
+        self.current_z = round(z_m * 1000, 2)
+        
+        # Actualizamos la interfaz numérica (Panel izquierdo)
         self.viewer_3d.actualizar_tcp_ui(self.current_x, self.current_y, self.current_z)
 
-        # Lógica Física de la Ventosa
+        # ==========================================
+        # Lógica Física de la Ventosa (Manejo de caja)
+        # ==========================================
         angulo = np.pi / 2
-        rot_ajuste = np.array([[np.cos(angulo),0,np.sin(angulo),0],[0,1,0,0],[-np.sin(angulo),0,np.cos(angulo),0],[0,0,0,1]])
-        ajuste_brecha = np.eye(4); ajuste_brecha[2, 3] = -0.045
+        rot_ajuste = np.array([[np.cos(angulo), 0, np.sin(angulo), 0],
+                               [0, 1, 0, 0],
+                               [-np.sin(angulo), 0, np.cos(angulo), 0],
+                               [0, 0, 0, 1]])
+        ajuste_brecha = np.eye(4)
+        ajuste_brecha[2, 3] = -0.045
         matriz_cuerpo = np.dot(fk_matrix, np.dot(rot_ajuste, ajuste_brecha))
-        desplazamiento_tapa = np.eye(4); desplazamiento_tapa[2, 3] = 0.075
+        
+        desplazamiento_tapa = np.eye(4)
+        desplazamiento_tapa[2, 3] = 0.075
         matriz_ventosa = np.dot(matriz_cuerpo, desplazamiento_tapa)
         
+        # Detección de proximidad geométrica
         distancia = np.linalg.norm(matriz_ventosa[:3, 3] - self.matriz_caja_mundo[:3, 3])
         
         if self.vacio_activo and distancia < 0.40: 
@@ -190,10 +225,13 @@ class RobotController(QObject):
         elif not self.vacio_activo:
             if self.caja_agarrada:
                 self.matriz_caja_mundo = self.viewer_3d.obtener_pose_caja()
-                if self.matriz_caja_mundo[2, 3] < 0.0: self.matriz_caja_mundo[2, 3] = 0.0 
+                # Evitar que la caja atraviese el suelo virtual
+                if self.matriz_caja_mundo[2, 3] < 0.0: 
+                    self.matriz_caja_mundo[2, 3] = 0.0 
                 self.viewer_3d.set_pose_caja(self.matriz_caja_mundo)
             self.caja_agarrada, self.payload_kg = False, 0.0
 
+        # Reflejar el agarre en el entorno 3D
         if self.caja_agarrada:
             self.viewer_3d.set_pose_caja(np.dot(matriz_ventosa, self.matriz_relativa_agarre))
         else:

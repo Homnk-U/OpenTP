@@ -9,14 +9,12 @@ class MotorPhysics:
         self.corriente_maxima = [35.0, 45.0, 35.0, 15.0, 15.0, 15.0]
 
         # 2. INERCIA TÉRMICA BLINDADA
-        # Alfa bajó y Beta subió. Ahora, si el motor consume 45A de forma sostenida (I^2 = 2025):
-        # Calor Generado: 2025 * 0.0001 = 0.202
-        # Calor Disipado a 65°C: (65-25)*0.005 = 0.200
-        # ¡El motor se estabilizará matemáticamente a los ~65°C sin importar cuánto tiempo pase!
-        self.alfa = [0.0001, 0.0001, 0.0001, 0.00015, 0.00015, 0.00015] 
-        self.beta = [0.005, 0.005, 0.005, 0.008, 0.008, 0.008]  
+        # J1 ajustado: Alta generación (0.0008) pero alta disipación (0.004)
+        # T_max sostenida a 14A = 25 + (0.0008/0.004)*(14^2) = 64.2°C
+        self.alfa = [0.0008, 0.0005, 0.0004, 0.0006, 0.0006, 0.0006] 
+        self.beta = [0.004, 0.002, 0.002, 0.003, 0.003, 0.003]
         
-        self.filtro_i = 0.15 
+        self.filtro_i = 0.15
 
         self.temperaturas = [self.t_amb] * 6
         self.corrientes = list(self.corriente_holding)
